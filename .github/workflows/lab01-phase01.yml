@@ -8,11 +8,12 @@ on:
         required: true
         type: choice
         options:
+          - validate-credentials
           - plan
           - apply
           - validate
           - destroy
-        default: plan
+        default: validate-credentials
 
 permissions:
   contents: read
@@ -32,18 +33,19 @@ jobs:
           NEBIUS_AUTHKEY_ID: ${{ secrets.NEBIUS_AUTHKEY_ID }}
           NEBIUS_AUTHKEY_PRIVATE_KEY: ${{ secrets.NEBIUS_AUTHKEY_PRIVATE_KEY }}
           NEBIUS_PROJECT_ID: ${{ vars.NEBIUS_PROJECT_ID }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           test -n "$NEBIUS_SA_ID" || { echo "Missing NEBIUS_SA_ID"; exit 1; }
           test -n "$NEBIUS_AUTHKEY_ID" || { echo "Missing NEBIUS_AUTHKEY_ID"; exit 1; }
           test -n "$NEBIUS_AUTHKEY_PRIVATE_KEY" || { echo "Missing NEBIUS_AUTHKEY_PRIVATE_KEY"; exit 1; }
-          test -n "$NEBIUS_PROJECT_ID" || { echo "Missing NEBIUS_PROJECT_ID repository/environment variable"; exit 1; }
-          echo "Required configuration is present. Secret values are not printed."
+          test -n "$NEBIUS_PROJECT_ID" || { echo "Missing NEBIUS_PROJECT_ID environment variable"; exit 1; }
+          test -n "$SSH_PRIVATE_KEY" || { echo "Missing SSH_PRIVATE_KEY"; exit 1; }
+          printf '%s\n' "$NEBIUS_AUTHKEY_PRIVATE_KEY" | grep -q -- 'BEGIN .*PRIVATE KEY' || { echo "NEBIUS_AUTHKEY_PRIVATE_KEY does not look like a PEM private key"; exit 1; }
+          printf '%s\n' "$SSH_PRIVATE_KEY" | grep -q -- 'BEGIN OPENSSH PRIVATE KEY' || { echo "SSH_PRIVATE_KEY does not look like an OpenSSH private key"; exit 1; }
+          echo "Required configuration is present and key formats look valid. Secret values were not printed."
 
-      # Terraform/Ansible steps will be added after Phase 01 is manually
-      # implemented and validated. The automation must reproduce the known-good
-      # state discovered during the hands-on execution.
-      - name: Phase 01 automation placeholder
+      - name: Explain selected action
         run: |
-          echo "Phase 01 automation will be enabled after the manual build and validation gate."
-          echo "Requested action: ${{ inputs.action }}"
+          echo "Selected action: ${{ inputs.action }}"
+          echo "Terraform/Ansible provisioning remains disabled until the manual Phase 01 build is completed and validated."
