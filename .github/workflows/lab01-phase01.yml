@@ -1,51 +1,79 @@
-name: Lab 01 - Phase 01 - Infrastructure Foundation
+name: Lab 01 - Slurm AI Factory
 
 on:
   workflow_dispatch:
     inputs:
-      action:
-        description: "Infrastructure action"
+      phase:
+        description: "Lab phase to execute"
         required: true
         type: choice
         options:
-          - validate-credentials
+          - phase-00
+          - phase-01
+          - phase-02
+          - phase-03
+          - phase-04
+          - phase-05
+          - phase-06
+          - phase-07
+          - phase-08
+          - phase-09
+          - phase-10
+          - phase-11
+          - phase-12
+          - phase-13
+          - phase-14
+          - phase-15
+          - phase-16
+        default: phase-00
+      action:
+        description: "Action"
+        required: true
+        type: choice
+        options:
+          - validate
           - plan
           - apply
-          - validate
           - destroy
-        default: validate-credentials
+        default: validate
 
 permissions:
   contents: read
 
 jobs:
-  phase01:
+  lab01:
     runs-on: ubuntu-latest
     environment: nebius-lab
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate required configuration
+      - name: Validate Lab 01 credentials
         shell: bash
         env:
           NEBIUS_SA_ID: ${{ secrets.NEBIUS_SA_ID }}
           NEBIUS_AUTHKEY_ID: ${{ secrets.NEBIUS_AUTHKEY_ID }}
           NEBIUS_AUTHKEY_PRIVATE_KEY: ${{ secrets.NEBIUS_AUTHKEY_PRIVATE_KEY }}
-          NEBIUS_PROJECT_ID: ${{ vars.NEBIUS_PROJECT_ID }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          NEBIUS_PROJECT_ID: ${{ vars.NEBIUS_PROJECT_ID }}
         run: |
           set -euo pipefail
           test -n "$NEBIUS_SA_ID" || { echo "Missing NEBIUS_SA_ID"; exit 1; }
           test -n "$NEBIUS_AUTHKEY_ID" || { echo "Missing NEBIUS_AUTHKEY_ID"; exit 1; }
           test -n "$NEBIUS_AUTHKEY_PRIVATE_KEY" || { echo "Missing NEBIUS_AUTHKEY_PRIVATE_KEY"; exit 1; }
-          test -n "$NEBIUS_PROJECT_ID" || { echo "Missing NEBIUS_PROJECT_ID environment variable"; exit 1; }
           test -n "$SSH_PRIVATE_KEY" || { echo "Missing SSH_PRIVATE_KEY"; exit 1; }
-          printf '%s\n' "$NEBIUS_AUTHKEY_PRIVATE_KEY" | grep -q -- 'BEGIN .*PRIVATE KEY' || { echo "NEBIUS_AUTHKEY_PRIVATE_KEY does not look like a PEM private key"; exit 1; }
-          printf '%s\n' "$SSH_PRIVATE_KEY" | grep -q -- 'BEGIN OPENSSH PRIVATE KEY' || { echo "SSH_PRIVATE_KEY does not look like an OpenSSH private key"; exit 1; }
-          echo "Required configuration is present and key formats look valid. Secret values were not printed."
-
-      - name: Explain selected action
-        run: |
+          test -n "$NEBIUS_PROJECT_ID" || { echo "Missing NEBIUS_PROJECT_ID"; exit 1; }
+          echo "Required Lab 01 configuration is present. Secret values are not printed."
+          echo "Selected phase: ${{ inputs.phase }}"
           echo "Selected action: ${{ inputs.action }}"
-          echo "Terraform/Ansible provisioning remains disabled until the manual Phase 01 build is completed and validated."
+
+      # Infrastructure automation is enabled phase-by-phase only after the
+      # corresponding manual phase has been executed, validated and captured.
+      # This single workflow is the Lab 01 entry point; it will grow as phases
+      # become reproducible rather than creating one workflow per phase.
+      - name: Phase execution gate
+        run: |
+          echo "Lab 01 workflow dispatch accepted."
+          echo "Phase: ${{ inputs.phase }}"
+          echo "Action: ${{ inputs.action }}"
+          echo "Automation for this phase will be enabled after its manual known-good state is finalized."
