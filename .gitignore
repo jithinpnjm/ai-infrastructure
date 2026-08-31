@@ -1,0 +1,39 @@
+# Terraform
+**/.terraform/
+**/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Secrets / credentials
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+*-credentials.json
+.env
+.env.*
+!.env.example
+
+# Ansible
+**/vault-password-file
+**/vault-pass*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated artifacts
+artifacts/
+outputs/
+*.log
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
