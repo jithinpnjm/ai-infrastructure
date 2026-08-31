@@ -1,0 +1,49 @@
+name: Lab 01 - Phase 01 - Infrastructure Foundation
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Infrastructure action"
+        required: true
+        type: choice
+        options:
+          - plan
+          - apply
+          - validate
+          - destroy
+        default: plan
+
+permissions:
+  contents: read
+
+jobs:
+  phase01:
+    runs-on: ubuntu-latest
+    environment: nebius-lab
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate required configuration
+        shell: bash
+        env:
+          NEBIUS_SA_ID: ${{ secrets.NEBIUS_SA_ID }}
+          NEBIUS_AUTHKEY_ID: ${{ secrets.NEBIUS_AUTHKEY_ID }}
+          NEBIUS_AUTHKEY_PRIVATE_KEY: ${{ secrets.NEBIUS_AUTHKEY_PRIVATE_KEY }}
+          NEBIUS_PROJECT_ID: ${{ vars.NEBIUS_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          test -n "$NEBIUS_SA_ID" || { echo "Missing NEBIUS_SA_ID"; exit 1; }
+          test -n "$NEBIUS_AUTHKEY_ID" || { echo "Missing NEBIUS_AUTHKEY_ID"; exit 1; }
+          test -n "$NEBIUS_AUTHKEY_PRIVATE_KEY" || { echo "Missing NEBIUS_AUTHKEY_PRIVATE_KEY"; exit 1; }
+          test -n "$NEBIUS_PROJECT_ID" || { echo "Missing NEBIUS_PROJECT_ID repository/environment variable"; exit 1; }
+          echo "Required configuration is present. Secret values are not printed."
+
+      # Terraform/Ansible steps will be added after Phase 01 is manually
+      # implemented and validated. The automation must reproduce the known-good
+      # state discovered during the hands-on execution.
+      - name: Phase 01 automation placeholder
+        run: |
+          echo "Phase 01 automation will be enabled after the manual build and validation gate."
+          echo "Requested action: ${{ inputs.action }}"
