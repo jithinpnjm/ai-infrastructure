@@ -6,10 +6,11 @@ This document records the **manual GPU-node bootstrap performed before the clust
 
 The node documented here was an exploratory/reference node. Its purpose was to understand the NVIDIA GPU software and hardware stack, establish the relationship between Linux GPU devices and Slurm GRES, and prove the basic Slurm compute-node path manually.
 
-This document is intentionally a **base reference**, not a final production design. Future phases will add and refine:
+> **Phase boundary:** this node was deliberately temporary. It has been deleted. The next compute nodes will be created fresh and configured through Ansible.
 
-- Ansible implementation
-- repeatable provisioning
+Future phases will extend this foundation with:
+
+- Ansible implementation and repeatable provisioning
 - multi-node configuration
 - MPI/PMIx/NCCL
 - InfiniBand and GPUDirect RDMA
@@ -21,11 +22,33 @@ This document is intentionally a **base reference**, not a final production desi
 - node lifecycle and rebuild automation
 - architecture redesigns
 
-Where something remains uncertain or was intentionally deferred, it is recorded rather than silently filled in. Future phases are expected to resolve these grey areas.
+Where something remains uncertain or was intentionally deferred, it is recorded rather than silently filled in.
 
 ---
 
-## 1. Role of the manual node
+## Phase 01 outcome
+
+| Area | Result |
+|---|---|
+| GPU platform | Nebius `gpu-l40s-d` |
+| GPU | NVIDIA L40S |
+| GPU count | 1 |
+| CPU | AMD EPYC Genoa, 16 vCPU |
+| Memory | ~96 GiB |
+| OS | Ubuntu 24.04.4 |
+| NVIDIA driver | 580.173.02 |
+| CUDA Toolkit | 13.0 / `nvcc 13.0.88` |
+| Slurm | 23.11.4 |
+| Cluster | `ai-factory-lab` |
+| MUNGE | Validated |
+| GRES | `gpu:L40S` validated |
+| cgroup | cgroup v2 CPU/memory/device enforcement validated |
+| Real CUDA workload | Validated |
+| Final node state | **Deleted after documentation** |
+
+---
+
+# 1. Role of the manual node
 
 The first L40S compute node was deliberately configured manually.
 
@@ -33,44 +56,42 @@ The learning sequence was:
 
 ```text
 Nebius GPU VM
-     |
-     v
+    │
+    ▼
 Linux / PCIe
-     |
-     v
+    │
+    ▼
 NVIDIA driver
-     |
-     v
+    │
+    ▼
 NVIDIA kernel module + device nodes
-     |
-     v
+    │
+    ▼
 CUDA Toolkit / CUDA runtime
-     |
-     v
+    │
+    ▼
 Real CUDA workload
-     |
-     v
+    │
+    ▼
 GPU telemetry / topology
-     |
-     v
+    │
+    ▼
 MUNGE
-     |
-     v
+    │
+    ▼
 Slurm slurmd
-     |
-     v
+    │
+    ▼
 GRES discovery
-     |
-     v
+    │
+    ▼
 cgroup v2 enforcement
-     |
-     v
+    │
+    ▼
 Slurm GPU allocation
 ```
 
-The node was **not intended to become the permanent production cluster node**. It was a reference implementation used to understand what the later Ansible automation must reproduce.
-
-The node can therefore be deleted after this documentation is captured.
+The node was **not intended to become the permanent production cluster node**. It was a reference implementation used to understand what later automation must reproduce.
 
 ---
 
@@ -80,33 +101,29 @@ The node can therefore be deleted after this documentation is captured.
 
 The compute node was created on Nebius using an L40S GPU platform.
 
-Relevant observed characteristics:
+| Property | Observed value |
+|---|---|
+| GPU platform | `gpu-l40s-d` |
+| GPU | NVIDIA L40S |
+| GPU count | 1 |
+| CPU | AMD EPYC Genoa |
+| vCPU | 16 |
+| Memory | ~96 GiB |
+| Root disk | 200 GB SSD |
+| OS | Ubuntu 24.04.4 |
+| Kernel | `6.11.0-1016-nvidia` |
+| Private IP | `10.0.0.18` |
+| Hostname | `l40-node-01` |
 
-```text
-GPU platform:     gpu-l40s-d
-GPU:              NVIDIA L40S
-GPU count:        1
-CPU:              AMD EPYC Genoa
-vCPU:             16
-Memory:           ~96 GiB
-Root disk:        200 GB SSD
-OS:               Ubuntu 24.04.4
-Kernel:           6.11.0-1016-nvidia
-Private IP:       10.0.0.18
-Hostname:         l40-node-01
-```
+The VM intentionally used a **driverless image** for this manual bootstrap so the NVIDIA driver installation and resulting software stack could be studied directly.
 
-The VM was intentionally started from a **driverless image** for this manual bootstrap. This allowed the NVIDIA driver installation and resulting software stack to be studied rather than hidden behind a preconfigured image.
-
-The later Ansible phase will use the Nebius preconfigured GPU image for the new nodes. That is a deliberate change in methodology, not an inconsistency.
+The later Ansible phase will use the Nebius preconfigured GPU image for the new nodes. This is a deliberate change in methodology.
 
 ---
 
 # 3. Initial hardware discovery
 
-Before installing the NVIDIA software stack, the node should be treated as a normal Linux host and its hardware inspected.
-
-Useful baseline commands:
+Before installing the NVIDIA software stack, inspect the host as a normal Linux system.
 
 ```bash
 uname -a
@@ -118,28 +135,23 @@ lspci -nn
 lspci -nn | grep -i -E 'nvidia|3d|vga'
 ```
 
-The important study point is the distinction between:
+The important progression is:
 
 ```text
 PCIe device exists
-        |
-        v
-Linux kernel recognizes the device
-        |
-        v
-NVIDIA kernel driver binds to it
-        |
-        v
+      ↓
+Linux kernel recognizes device
+      ↓
+NVIDIA kernel driver binds
+      ↓
 /dev/nvidia* devices appear
-        |
-        v
-nvidia-smi can communicate with the GPU
-        |
-        v
-CUDA can execute work on the GPU
+      ↓
+nvidia-smi communicates with GPU
+      ↓
+CUDA executes work on GPU
 ```
 
-A GPU being visible in `lspci` does **not** prove that CUDA or NVIDIA management functionality is operational.
+A GPU visible in `lspci` does **not** prove that the complete NVIDIA/CUDA stack is operational.
 
 ---
 
@@ -149,13 +161,13 @@ A GPU being visible in `lspci` does **not** prove that CUDA or NVIDIA management
 
 The node initially did not have a working NVIDIA driver stack.
 
-The package resolution selected the Ubuntu NVIDIA server-driver package:
+The Ubuntu package resolution selected:
 
 ```text
 nvidia-driver-570-server
 ```
 
-The resulting installed DKMS driver was:
+The installed DKMS driver was:
 
 ```text
 nvidia-srv/580.173.02
@@ -168,11 +180,11 @@ Driver Version: 580.173.02
 CUDA Version:   13.0
 ```
 
-The package name and actual kernel-driver version should not be assumed to be identical. Package metadata, DKMS module version, and `nvidia-smi` reported driver version are separate things that should be checked during troubleshooting.
+### Versioning note
 
-## 4.2 Driver validation
+Package name, DKMS module version, and the version reported by `nvidia-smi` are separate pieces of evidence. During troubleshooting, check all three rather than assuming they are identical.
 
-Primary validation:
+## 4.2 Validation
 
 ```bash
 nvidia-smi
@@ -183,25 +195,23 @@ ls -l /dev/nvidia*
 
 The successful state showed the L40S through `nvidia-smi` and exposed the NVIDIA device nodes.
 
-### Study point
-
-A useful troubleshooting chain is:
+### Study point: troubleshooting chain
 
 ```text
 lspci
-  -> kernel/device detection
+  → device detection
 
 lsmod
-  -> NVIDIA kernel module
+  → NVIDIA kernel modules
 
 /dev/nvidia*
-  -> device interface
+  → device interface
 
 nvidia-smi
-  -> NVIDIA management stack
+  → NVIDIA management stack
 
 CUDA test
-  -> actual compute/runtime functionality
+  → actual compute/runtime functionality
 ```
 
 Do not use `nvidia-smi` alone as proof that the complete CUDA compute environment is healthy.
@@ -224,86 +234,88 @@ Observed compiler version:
 Cuda compilation tools, release 13.0, V13.0.88
 ```
 
-The CUDA environment was made available through `/etc/profile.d/cuda.sh`.
+The CUDA environment was made available through:
 
-The important distinction is:
+```text
+/etc/profile.d/cuda.sh
+```
+
+### Driver vs Toolkit vs application
 
 ```text
 NVIDIA driver
-        !=
+      ≠
 CUDA Toolkit
-        !=
+      ≠
 CUDA application/runtime
 ```
 
-The driver is responsible for communicating with the GPU and supporting CUDA execution. The toolkit provides development/runtime components such as `nvcc` and CUDA libraries needed to build and run CUDA applications.
-
-A system can have a functioning NVIDIA driver while `nvcc` is unavailable.
+A host can have a working NVIDIA driver while `nvcc` is unavailable. The driver, toolkit, runtime libraries, and applications therefore need separate validation.
 
 ---
 
 # 6. Real CUDA validation
 
-A CUDA device-query test was used to verify the actual GPU from CUDA rather than merely checking `nvidia-smi`.
+A CUDA device-query test verified the actual GPU from the CUDA stack rather than merely checking `nvidia-smi`.
 
 Observed result:
 
 ```text
-GPU count:       1
-GPU:             NVIDIA L40S
+GPU count:          1
+GPU:                NVIDIA L40S
 Compute Capability: 8.9
-Memory:          ~44.39 GiB
+Memory:             ~44.39 GiB
 ```
 
 A real CUDA vector-add operation was then executed.
 
-The result was:
+Result:
 
 ```text
 3.0
 ```
 
-This was important because it proved an actual CUDA kernel execution path rather than only device enumeration.
+This proved an actual CUDA kernel execution path rather than device enumeration alone.
 
 ## Validation hierarchy
 
 ```text
 nvidia-smi
-    |
-    | management visibility
-    v
+    │
+    │ management visibility
+    ▼
 CUDA device query
-    |
-    | runtime/device visibility
-    v
+    │
+    │ runtime/device visibility
+    ▼
 CUDA vector addition
-    |
-    | actual kernel execution
-    v
+    │
+    │ actual kernel execution
+    ▼
 GPU workload
 ```
 
-This pattern should be retained for future GPU-node validation.
+This validation pattern should be retained for future GPU-node health checks.
 
 ---
 
 # 7. GPU stress and telemetry baseline
 
-A GPU stress workload was executed to establish a real utilization baseline.
+A real GPU stress workload was executed to establish a utilization baseline.
 
-Observed behavior included approximately:
+Observed values included approximately:
 
-```text
-SM utilization:       100%
-Memory utilization:   100%
-Power:                ~230–231 W
-Temperature:          ~56–57 C
-VRAM used:            ~3.5 GiB
-GPU clock:            ~2520 MHz
-Memory clock:         ~9001 MHz
-```
+| Metric | Observation |
+|---|---:|
+| SM utilization | 100% |
+| Memory utilization | 100% |
+| Power | ~230–231 W |
+| Temperature | ~56–57 °C |
+| VRAM used | ~3.5 GiB |
+| GPU clock | ~2520 MHz |
+| Memory clock | ~9001 MHz |
 
-The exact values are workload- and environment-dependent; they are recorded here as observations from this node, not universal L40S specifications.
+These are **observations from the lab VM**, not universal L40S specifications.
 
 Useful commands:
 
@@ -315,9 +327,7 @@ nvidia-smi --query-gpu=name,temperature.gpu,power.draw,utilization.gpu,utilizati
 
 ### Study point
 
-A useful AI-infrastructure validation principle is:
-
-> Do not stop at “GPU is visible.” Drive the GPU and verify that the hardware, driver, power, clocks, temperature and memory path behave as expected.
+Do not stop at “GPU is visible.” Drive the GPU and verify that hardware telemetry, power, clocks, temperature, and memory behavior are sane.
 
 Future phases should turn these observations into automated health checks and monitoring.
 
@@ -327,40 +337,31 @@ Future phases should turn these observations into automated health checks and mo
 
 The L40S is a PCIe GPU and does not use NVLink in this configuration.
 
-The PCIe capability and negotiated link were inspected using:
+The PCIe capability and negotiated link were inspected with:
 
 ```bash
 lspci -vv
 ```
 
-The GPU reported capability equivalent to:
+Observed:
 
 ```text
 LnkCap: 16GT/s x16
-```
-
-but the negotiated link was observed as:
-
-```text
 LnkSta: 2.5GT/s x16
 ```
 
-Therefore the virtualized environment exposed the device with an observed **PCIe Gen1 x16 negotiated link**, despite the device capability being higher.
-
-This was recorded as an environment observation. We did not attempt to force or repair the negotiated PCIe generation.
+Therefore, in the guest environment, the device capability was higher than the observed negotiated link state. We recorded this as an environment observation and did **not** attempt to force or repair the negotiated generation.
 
 ### Study point
 
 Always distinguish:
 
 ```text
-LnkCap = what the device/link supports
-LnkSta = what is currently negotiated
+LnkCap = capability
+LnkSta = current negotiated state
 ```
 
-A GPU can therefore be healthy while the effective PCIe bandwidth is lower than the physical device capability.
-
-This becomes especially important for:
+This matters for:
 
 - CPU-to-GPU transfers
 - data loading
@@ -368,13 +369,13 @@ This becomes especially important for:
 - multi-GPU communication
 - NCCL performance
 
-The PCIe baseline should be rechecked in later phases when performance benchmarking is introduced.
+The PCIe baseline should be rechecked when performance benchmarking is introduced.
 
 ---
 
 # 9. NVIDIA topology
 
-The topology was inspected with:
+Topology was inspected with:
 
 ```bash
 nvidia-smi topo -m
@@ -384,29 +385,20 @@ Observed characteristics:
 
 ```text
 GPU0 CPU Affinity: 0-15
-NUMA:               0
-NVLink:             none
+NUMA:              0
+NVLink:            none
 ```
 
-The L40S therefore represents a different topology class from the later H100/H200 HGX nodes.
+The L40S therefore represents a different topology class from the later H100/H200 HGX systems.
 
-### Important architectural distinction
+## GPU classes used by the lab
 
-The future lab will use different GPU classes for different learning objectives:
+| GPU class | Primary learning objective |
+|---|---|
+| L40S | PCIe GPU, Slurm/GRES, cgroups, PCIe-oriented workloads |
+| H100/H200 HGX | 8-GPU NVLink/SXM, InfiniBand, NCCL, collective-performance studies |
 
-```text
-L40S
-  -> PCIe GPU
-  -> no NVLink
-  -> useful for Slurm/GPU scheduling and PCIe-based workloads
-
-H100/H200 HGX
-  -> 8-GPU NVLink/SXM systems
-  -> InfiniBand
-  -> useful for multi-GPU/NCCL/collective-performance studies
-```
-
-We should not attempt to infer NVLink behavior from the L40S node. That belongs to the later HGX/NCCL phase.
+Do not infer NVLink behavior from the L40S node. That belongs to the later HGX/NCCL phase.
 
 ---
 
@@ -414,22 +406,20 @@ We should not attempt to infer NVLink behavior from the L40S node. That belongs 
 
 Slurm uses MUNGE authentication in this lab.
 
-The controller and compute node must share the same MUNGE trust domain.
-
-The critical property is the shared key:
+The controller and compute node must share the same MUNGE trust domain. The critical shared key is:
 
 ```text
 /etc/munge/munge.key
 ```
 
-The key was transferred to the compute node and installed with:
+The key was installed on the compute node with:
 
 ```text
-owner:  munge:munge
-mode:   0400
+owner: munge:munge
+mode:  0400
 ```
 
-The SHA-256 hash of the controller and compute-node keys was verified to be identical:
+The SHA-256 hash matched between controller and compute node:
 
 ```text
 75dcd8df132f7be0f069906b2f504967f8eca65e834e953f7039011188d2748e
@@ -450,22 +440,20 @@ STATUS: Success (0)
 
 ### Study point
 
-MUNGE is not a GPU mechanism and does not perform scheduling. It is part of the **authentication/trust layer** required for Slurm daemon communication.
-
-Conceptually:
+MUNGE is not a GPU mechanism and does not perform scheduling. It belongs to the **authentication/trust layer** required for Slurm daemon communication.
 
 ```text
 slurmctld
-    |
-    | authenticated Slurm RPC
-    v
+    │
+    │ authenticated Slurm RPC
+    ▼
 slurmd
-    |
-    v
+    │
+    ▼
 MUNGE trust
 ```
 
-Later phases should cover stronger security architecture, key distribution and secret-management automation.
+Later phases should cover key distribution and secret-management automation.
 
 ---
 
@@ -473,42 +461,19 @@ Later phases should cover stronger security architecture, key distribution and s
 
 After the underlying GPU stack was proven, the node was integrated with Slurm.
 
-The node ran:
+| Property | Value |
+|---|---|
+| Slurm version | `23.11.4` |
+| Cluster | `ai-factory-lab` |
+| Node | `l40-node-01` |
+| Partition | `gpu` |
+| Logical GPU resource | `gpu:L40S` |
+| Node-local GRES | `Name=gpu Type=L40S File=/dev/nvidia0` |
+
+The final controller-side node definition was:
 
 ```text
-slurmd 23.11.4
-```
-
-The cluster identity was:
-
-```text
-ai-factory-lab
-```
-
-The node was:
-
-```text
-l40-node-01
-```
-
-and belonged to the:
-
-```text
-gpu
-```
-
-partition.
-
-The controller's logical GPU resource was:
-
-```text
-gpu:L40S
-```
-
-The node-local GRES mapping was:
-
-```text
-Name=gpu Type=L40S File=/dev/nvidia0
+NodeName=l40-node-01 NodeAddr=10.0.0.18 NodeHostname=l40-node-01 CPUs=16 Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=2 RealMemory=96556 Gres=gpu:L40S State=UNKNOWN
 ```
 
 ---
@@ -517,43 +482,23 @@ Name=gpu Type=L40S File=/dev/nvidia0
 
 This is one of the most important concepts established during the manual build.
 
-The physical GPU appears to Linux as a device such as:
-
-```text
-/dev/nvidia0
-```
-
-NVIDIA identifies the device as:
-
-```text
-NVIDIA L40S
-```
-
-Slurm represents it as a logical Generic RESource:
-
-```text
-gpu:L40S
-```
-
-The relationship is:
-
 ```text
 Physical GPU
 NVIDIA L40S
-      |
-      v
+      │
+      ▼
 Linux device
 /dev/nvidia0
-      |
-      v
+      │
+      ▼
 Slurm gres.conf
 Name=gpu Type=L40S File=/dev/nvidia0
-      |
-      v
+      │
+      ▼
 Slurm controller
 Gres=gpu:L40S
-      |
-      v
+      │
+      ▼
 Job request
 --gres=gpu:L40S:1
 ```
@@ -572,13 +517,13 @@ not:
 NVIDIA:GPU:L40S
 ```
 
-An earlier configuration attempt used an incorrect hierarchical interpretation and did not match the expected Slurm GRES syntax. The final configuration uses:
+An earlier configuration attempt used an incorrect hierarchical interpretation. The final configuration uses the consistent Slurm resource identity:
 
 ```text
 gpu:L40S
 ```
 
-This naming relationship must remain consistent across the controller configuration, `gres.conf`, and job request.
+This naming relationship must remain consistent across the controller configuration, `gres.conf`, and job requests.
 
 ---
 
@@ -598,27 +543,27 @@ Gres Name=gpu Type=L40S Count=1 Index=0 ID=7696487 File=/dev/nvidia0
 
 The important fields are:
 
-```text
-Name   = gpu
-Type   = L40S
-Count  = 1
-Index  = 0
-File   = /dev/nvidia0
-```
+| Field | Value |
+|---|---|
+| Name | `gpu` |
+| Type | `L40S` |
+| Count | `1` |
+| Index | `0` |
+| File | `/dev/nvidia0` |
 
-This is a useful boundary test:
+This is a boundary test:
 
 ```text
 NVIDIA stack works
-        ↓
+      ↓
 Linux device exists
-        ↓
+      ↓
 Slurm GRES configuration parses
-        ↓
-slurmd discovers the GPU
+      ↓
+slurmd discovers GPU
 ```
 
-If `slurmd -G` does not report the expected GPU, the problem should be investigated before debugging scheduler allocation.
+If `slurmd -G` does not report the expected GPU, investigate that failure before debugging scheduler allocation.
 
 ---
 
@@ -630,7 +575,7 @@ The compute node used Linux cgroup v2 through:
 /sys/fs/cgroup
 ```
 
-The relevant Slurm configuration was:
+Relevant Slurm configuration:
 
 ```ini
 TaskPlugin=task/cgroup
@@ -642,30 +587,28 @@ ConstrainSwapSpace=yes
 AllowedSwapSpace=200
 ```
 
-The purpose is to turn Slurm's resource allocation into local kernel-enforced restrictions.
-
 Conceptually:
 
 ```text
 Slurm scheduler
-     |
-     | allocation decision
-     v
+     │
+     │ allocation decision
+     ▼
 slurmd / slurmstepd
-     |
-     | create/manage cgroups
-     v
+     │
+     │ create/manage cgroups
+     ▼
 Linux cgroup v2
-     |
-     +--> CPU restriction
-     +--> memory restriction
-     +--> device/GPU restriction
-     +--> process containment/cleanup
+     │
+     ├── CPU restriction
+     ├── memory restriction
+     ├── device/GPU restriction
+     └── process containment / cleanup
 ```
 
 ### Important principle
 
-> Slurm decides what resources a job receives; Linux cgroups enforce those decisions on the compute node.
+> **Slurm decides what resources a job receives; Linux cgroups enforce those decisions on the compute node.**
 
 ---
 
@@ -673,36 +616,34 @@ Linux cgroup v2
 
 The example configuration shipped with the installed Slurm package contained options that were not accepted by the installed Slurm version.
 
-The problematic options included:
+Problematic options included:
 
 ```text
 CgroupAutomount
 ConstrainKmemSpace
 ```
 
-`slurmd` initially failed while parsing the configuration.
-
-The obsolete options were removed and the node recovered.
+`slurmd` initially failed while parsing the configuration. Removing the obsolete options allowed the node to recover.
 
 ### Operational lesson
 
-Never assume that a configuration example found in documentation, package files, or an older Slurm deployment is valid for the exact installed version.
+Do not assume that a configuration example from documentation, package files, or an older deployment is valid for the exact installed Slurm version.
 
-The correct workflow is:
+Use this workflow:
 
 ```text
 Installed version
-       ↓
+      ↓
 Version-specific documentation
-       ↓
+      ↓
 Configuration
-       ↓
-Parser/service validation
-       ↓
+      ↓
+Parser / service validation
+      ↓
 Runtime validation
 ```
 
-This lesson will be important when the configuration is converted into Ansible templates.
+This becomes especially important when the configuration is converted into Ansible templates.
 
 ---
 
@@ -720,328 +661,280 @@ Inside the job cgroup, the effective CPU set was checked:
 cat /sys/fs/cgroup$CG/cpuset.cpus.effective
 ```
 
-The result was:
+Observed result:
 
 ```text
 0-3
 ```
 
-representing four CPUs.
-
 ### What this proves
 
 Slurm's CPU allocation was translated into a Linux cpuset restriction.
 
-This is stronger than checking only:
-
-```bash
-echo $SLURM_CPUS_ON_NODE
-```
-
-because an environment variable describes the allocation to the application, whereas `cpuset.cpus.effective` demonstrates kernel-level CPU confinement.
+This is stronger than merely observing that the process was launched by `srun`.
 
 ---
 
 # 17. Memory enforcement validation
 
-The job requested:
+The same resource-constrained job was used to validate the memory path.
+
+Requested memory:
 
 ```text
---mem=4096M
+4096M
 ```
 
-The leaf task cgroup initially showed:
+The effective cgroup limit observed in the job hierarchy was:
 
 ```text
-memory.max=max
-memory.high=max
+memory.max = 4294967296
 ```
 
-This initially appeared to indicate that the memory limit was missing.
+### What this proves
 
-Inspection of the parent cgroup showed:
+The scheduler's memory request was translated into a kernel-enforced cgroup memory limit.
 
-```text
-memory.max  = 4294967296
-memory.high = 4294967296
-```
+An important troubleshooting observation from the lab was that the effective limit could appear at a **parent cgroup** rather than only at the most obvious leaf path.
 
-and:
-
-```text
-4294967296 bytes = 4096 MiB
-```
-
-### Lesson
-
-With cgroup v2 and the Slurm/systemd hierarchy, a limit does not necessarily have to appear on the leaf task cgroup.
-
-When debugging resource enforcement, inspect the hierarchy:
-
-```text
-systemd scope
-   ↓
-job
-   ↓
-step
-   ↓
-user
-   ↓
-task
-```
-
-Do not conclude that enforcement is missing from a single leaf inspection.
+When validating cgroup behavior, inspect the complete job/step/user/task hierarchy rather than assuming the limit will exist at one exact directory.
 
 ---
 
-# 18. GPU allocation validation
+# 18. GPU device enforcement validation
 
-A GPU job was launched with:
+The node was tested both with and without a GPU allocation.
+
+## GPU allocation
 
 ```bash
 srun -p gpu --gres=gpu:L40S:1 --pty bash
 ```
 
-Inside the job:
-
-```bash
-echo "$CUDA_VISIBLE_DEVICES"
-nvidia-smi -L
-```
-
-The observed state included:
+Inside the allocation:
 
 ```text
 CUDA_VISIBLE_DEVICES=0
-GPU 0: NVIDIA L40S
 ```
 
-### What this proves
-
-The following chain was operational:
-
-```text
-Slurm job request
-      ↓
-GRES scheduler allocation
-      ↓
-slurmd/slurmstepd
-      ↓
-GPU device confinement
-      ↓
-CUDA-visible GPU
-      ↓
-NVIDIA runtime access
-```
-
----
-
-# 19. No-GPU isolation validation
-
-A separate job was launched without requesting a GPU:
+and the L40S was visible through:
 
 ```bash
-srun -p gpu --cpus-per-task=2 --mem=1G --pty bash
-```
-
-Inside that job:
-
-```bash
-echo "$CUDA_VISIBLE_DEVICES"
 nvidia-smi -L
 ```
 
-The observed result was:
+## No-GPU allocation
+
+A job without a GPU allocation was tested.
+
+Observed state:
 
 ```text
 CUDA_VISIBLE_DEVICES=
-No devices found.
-```
-
-### Why this test matters
-
-This validates **negative isolation**, not only positive allocation.
-
-A successful GPU job proves:
-
-> A job that requests a GPU can access it.
-
-The no-GPU test proves:
-
-> A job that does not request a GPU cannot simply access the node's GPU.
-
-This is an important production-style validation pattern for shared GPU infrastructure.
-
----
-
-# 20. Slurm cgroup hierarchy observed
-
-A real Slurm task showed a cgroup path similar to:
-
-```text
-/system.slice/l40-node-01_slurmstepd.scope/job_6/step_0/user/task_0
-```
-
-Conceptually:
-
-```text
-/system.slice/
-  └── l40-node-01_slurmstepd.scope/
-       └── job_<id>/
-            └── step_0/
-                 └── user/
-                      └── task_0/
-```
-
-The important conceptual model is:
-
-```text
-Job
-  = scheduler allocation
-
-Step
-  = execution unit within the job
-
-Task
-  = launched workload unit/process group
-```
-
-The exact hierarchy can vary with Slurm and systemd configuration. Future phases should investigate the complete process/cgroup lifecycle during batch jobs, multi-task jobs and distributed training.
-
----
-
-# 21. Controller ↔ compute-node relationship
-
-The manual work established an important separation of responsibilities.
-
-```text
-+----------------------------+
-| slurm-controller-01        |
-|                            |
-| slurmctld                  |
-| Scheduling/control         |
-| Cluster configuration      |
-+-------------+--------------+
-              |
-              | Slurm RPC
-              | authenticated by MUNGE
-              v
-+----------------------------+
-| l40-node-01                |
-|                            |
-| slurmd                     |
-| slurmstepd                 |
-| NVIDIA driver/CUDA         |
-| GRES                       |
-| Linux cgroup v2            |
-| Actual workload            |
-+----------------------------+
-```
-
-The controller knows what resources are configured.
-
-The compute node is where those resources physically exist and where Linux enforces restrictions.
-
-This distinction is foundational for later topics such as:
-
-- node registration
-- drain states
-- GRES failures
-- cgroup failures
-- GPU health failures
-- distributed jobs
-- node lifecycle automation
-
----
-
-# 22. Node registration model
-
-The controller configured the node approximately as:
-
-```ini
-NodeName=l40-node-01 \
-  NodeAddr=10.0.0.18 \
-  NodeHostname=l40-node-01 \
-  CPUs=16 \
-  Boards=1 \
-  SocketsPerBoard=1 \
-  CoresPerSocket=8 \
-  ThreadsPerCore=2 \
-  RealMemory=96556 \
-  Gres=gpu:L40S \
-  State=UNKNOWN
-```
-
-The registered node eventually reported:
-
-```text
-CPUTot=16
-RealMemory=96556
-Gres=gpu:L40S:1
-State=IDLE
-```
-
-### Study point
-
-There is a difference between:
-
-```text
-configured node
 ```
 
 and:
 
 ```text
-registered/healthy node
+nvidia-smi -L
+No devices found.
 ```
 
-The controller configuration describes what the cluster expects.
+### What this proves
 
-`slurmd` reports what the compute node actually provides.
+`ConstrainDevices=yes` was not merely configured; it produced an observable device-isolation result.
 
-A mismatch can result in registration errors, invalid resource states, or node draining.
+```text
+Slurm GPU allocation
+        ↓
+slurmstepd
+        ↓
+cgroup device policy
+        ↓
+GPU visible only to allocated job
+```
+
+This is a key production concept: **resource accounting and resource isolation are separate concerns, and the latter needs kernel enforcement.**
 
 ---
 
-# 23. Cluster-name mismatch incident
+# 19. Observed Slurm cgroup hierarchy
 
-During the manual configuration, the cluster name was initially different from the final intended name.
-
-The cluster was initially initialized with a different identity and later changed to:
-
-```ini
-ClusterName=ai-factory-lab
-```
-
-Slurm detected persistent state associated with the previous identity and reported:
+During the validation, a representative cgroup path was observed as:
 
 ```text
-CLUSTER NAME MISMATCH
+/system.slice/l40-node-01_slurmstepd.scope/job_<id>/step_0/user/task_0
 ```
 
-The stale cluster-name state was removed and `slurmctld` was restarted using the intended configuration.
+The exact job identifiers are intentionally represented symbolically here.
 
-The final cluster name is:
+### Study point
+
+When troubleshooting Slurm resource enforcement, correlate:
+
+```text
+job ID
+  ↓
+step ID
+  ↓
+slurmstepd scope
+  ↓
+cgroup path
+  ↓
+CPU / memory / device controls
+```
+
+This provides a useful bridge between the Slurm control plane and the Linux kernel enforcement layer.
+
+---
+
+# 20. End-to-end Slurm GPU allocation
+
+The final end-to-end allocation test was:
+
+```bash
+srun -p gpu --gres=gpu:L40S:1 --pty bash
+```
+
+Inside the allocation:
+
+```text
+hostname=l40-node-01
+CUDA_VISIBLE_DEVICES=0
+```
+
+and:
+
+```bash
+nvidia-smi -L
+```
+
+reported the L40S GPU UUID.
+
+The controller reported the node as available in the `gpu` partition before the node was deleted.
+
+The final scheduling path was therefore proven:
+
+```text
+User job request
+      ↓
+Slurm controller
+      ↓
+Partition / node selection
+      ↓
+GRES allocation
+      ↓
+slurmd / slurmstepd
+      ↓
+cgroup enforcement
+      ↓
+/dev/nvidia0
+      ↓
+CUDA_VISIBLE_DEVICES
+      ↓
+NVIDIA GPU
+```
+
+---
+
+# 21. Configuration issues encountered and resolved
+
+## 21.1 Cluster-name mismatch
+
+The cluster name was changed during the build from an earlier value to:
 
 ```text
 ai-factory-lab
 ```
 
+Existing Slurm state still contained the previous cluster identity, causing a **cluster name mismatch**.
+
+Recovery required removing the stale cluster-name state and restarting `slurmctld` with the intended configuration.
+
 ### Lesson
 
-Treat `ClusterName` as persistent cluster identity, not as a cosmetic label.
-
-Once Slurm state exists, changing the name can create a state/identity mismatch.
-
-Future automation should make the cluster identity explicit and stable.
+Once Slurm state exists, treat `ClusterName` as a deliberate identity attribute. Do not casually change it during normal operations.
 
 ---
 
-# 24. Slurm command/version lessons
+## 21.2 Incorrect GRES naming
 
-A few operational details were learned during the manual phase.
+An earlier GRES attempt used:
 
-### Correct controller health command
+```text
+NVIDIA:GPU:L40S
+```
+
+The corrected Slurm resource identity was:
+
+```text
+gpu:L40S
+```
+
+### Lesson
+
+Keep the GRES type consistent across:
+
+```text
+slurm.conf
+      ↕
+gres.conf
+      ↕
+srun/sbatch request
+```
+
+---
+
+## 21.3 Deprecated cgroup options
+
+The installed Slurm version rejected configuration options such as:
+
+```text
+CgroupAutomount
+ConstrainKmemSpace
+```
+
+They were removed.
+
+### Lesson
+
+Configuration compatibility must be checked against the **actual Slurm version installed on the node**.
+
+---
+
+## 21.4 AccountingStorageTRES / GPU accounting dependency
+
+GPU accounting configuration depends on the Slurm accounting subsystem. The manual single-node validation therefore established GPU allocation and isolation first; full accounting is intentionally deferred to the next phase.
+
+The next phase will add:
+
+```text
+MariaDB
+   ↓
+slurmdbd
+   ↓
+slurmctld accounting integration
+```
+
+---
+
+## 21.5 PMIx warning
+
+The environment produced PMIx-related warnings because PMIx was not installed/configured.
+
+This was intentionally deferred until MPI/NCCL work, where the complete process-launch and communication stack will be introduced.
+
+### Lesson
+
+Do not add every possible dependency to the base node simply because a warning exists. Introduce the dependency when the corresponding workload requires it, then validate the complete path.
+
+---
+
+# 22. Commands that are easy to misuse
+
+A few command-level lessons were captured during Phase 01.
+
+### Slurm controller health
 
 Use:
 
@@ -1049,20 +942,23 @@ Use:
 scontrol ping
 ```
 
-rather than:
+not:
 
 ```bash
 scontrol -ping
 ```
 
-### `slurmd -t`
+### `slurmd` validation
 
-The installed Slurm 23.11.4 build did not provide the expected `slurmd -t` validation command.
-
-Useful alternatives include:
+The installed Slurm 23.11.4 package did not support:
 
 ```bash
-slurmd -G
+slurmd -t
+```
+
+Useful alternatives were direct/debug daemon execution and service validation, for example:
+
+```bash
 slurmd -Dvvv
 systemctl status slurmd
 journalctl -u slurmd
@@ -1070,355 +966,310 @@ journalctl -u slurmd
 
 ### Study point
 
-Commands should be validated against the installed Slurm version rather than assumed from older tutorials or other distributions.
+Always validate commands against the exact installed version instead of assuming command-line options are universal across Slurm releases.
 
 ---
 
-# 25. PMIx warning — intentionally deferred
+# 23. GPU virtualization / SR-IOV study boundary
 
-Slurm 23.11.4 reported warnings around:
+During PCIe investigation, the guest-visible link state raised a question about whether the L40S was being delivered through NVIDIA vGPU or another virtualization mechanism.
+
+### What Phase 01 established
+
+The guest clearly received an NVIDIA L40S through the cloud platform's GPU attachment/virtualization infrastructure.
+
+The guest also exposed:
 
 ```text
-mpi/pmix
-mpi/pmix_v5
+PCIe capability: 16GT/s x16
+Negotiated state: 2.5GT/s x16
 ```
 
-because PMIx was not installed.
+### What Phase 01 did **not** establish
 
-This did not block the single-node Slurm/GPU foundation.
+The guest-side evidence was not sufficient to prove that Nebius used:
 
-PMIx/MPI integration was intentionally deferred until the distributed workload phase.
+- NVIDIA vGPU
+- SR-IOV
+- PCIe passthrough
+- a mediated-device model
+- dedicated physical allocation
 
-This is not considered a resolved configuration item yet.
-
-Future work should establish:
+These mechanisms must not be conflated.
 
 ```text
-PMIx
-MPI
-Slurm launch
-NCCL
-multi-process GPU communication
+PCIe virtualization ≠ NVIDIA vGPU
+SR-IOV          ≠ NVIDIA vGPU
+SR-IOV          ≠ MIG
+PCIe passthrough ≠ SR-IOV
 ```
 
-and determine the correct production-like process-launch model for distributed training.
+### SR-IOV study point
 
----
+**SR-IOV** means **Single Root I/O Virtualization**.
 
-# 26. Accounting was intentionally deferred
-
-Basic Slurm GPU scheduling was validated without introducing SlurmDBD at this stage.
-
-An attempted configuration involving GPU accounting TRES caused `slurmctld` to require SlurmDBD.
-
-The problematic accounting configuration was removed for the foundation phase.
-
-The next phase will deliberately introduce:
+The basic PCIe model is:
 
 ```text
-MariaDB
-   ↓
-slurmdbd
-   ↓
-slurmctld
-   ↓
-sacctmgr
-   ↓
-cluster/account/user associations
-   ↓
-job accounting
+Physical PCIe device
+        │
+        ▼
+Physical Function (PF)
+        │
+        ├──── Virtual Function (VF)
+        ├──── Virtual Function (VF)
+        └──── Virtual Function (VF)
 ```
 
-This is a deliberate phase boundary, not an architectural omission.
+SR-IOV allows a PCIe device to expose multiple virtual functions. In GPU environments, SR-IOV can participate in how virtual device instances are exposed, but SR-IOV itself does **not** define the GPU's compute/memory partitioning model.
 
----
-
-# 27. Complete manual validation matrix
-
-| Layer | Validation | Observed result | Confidence |
-|---|---|---|---|
-| OS | Ubuntu/kernel inspection | Ubuntu 24.04.4 / 6.11.0-1016-nvidia | Proven |
-| Hardware | `lspci` | L40S visible | Proven |
-| NVIDIA module | `lsmod` | NVIDIA module loaded | Proven |
-| Device nodes | `/dev/nvidia*` | NVIDIA devices present | Proven |
-| Driver | `nvidia-smi` | Driver 580.173.02 | Proven |
-| GPU | `nvidia-smi -L` | L40S visible | Proven |
-| CUDA compiler | `nvcc --version` | CUDA 13.0 / 13.0.88 | Proven |
-| CUDA runtime | device query | L40S / CC 8.9 | Proven |
-| CUDA compute | vector add | result 3.0 | Proven |
-| GPU stress | utilization/power/temp | real GPU load observed | Proven |
-| PCIe | `lspci -vv` | x16 capability / Gen1 x16 observed | Proven observation |
-| Topology | `nvidia-smi topo -m` | CPU/NUMA affinity, no NVLink | Proven observation |
-| MUNGE | `munge  ` | Success | Proven |
-| Slurm daemon | `slurmd` | operational | Proven |
-| GRES | `slurmd -G` | `gpu:L40S`, `/dev/nvidia0` | Proven |
-| Registration | `sinfo` / `scontrol show node` | node IDLE | Proven |
-| GPU allocation | `srun --gres=gpu:L40S:1` | GPU visible | Proven |
-| GPU isolation | no-GPU `srun` | GPU unavailable | Proven |
-| CPU cgroup | `cpuset.cpus.effective` | four-CPU restriction | Proven |
-| Memory cgroup | parent `memory.max` | 4096 MiB restriction | Proven |
-| Accounting | SlurmDBD | deferred | Not yet implemented |
-| PMIx | MPI/PMIx | deferred | Not yet implemented |
-| Multi-node | distributed workload | deferred | Not yet implemented |
-| NCCL | collectives/performance | deferred | Not yet implemented |
-| InfiniBand | fabric validation | deferred | Not yet implemented |
-| GPUDirect RDMA | validation | deferred | Not yet implemented |
-
----
-
-# 28. What this phase actually proved
-
-The manual build proved the complete **single-node GPU + Slurm foundation**:
+This must be distinguished from:
 
 ```text
-Nebius L40S VM
-      ↓
-Linux hardware detection
-      ↓
+NVIDIA vGPU → GPU virtualization technology with profiles
+MIG         → hardware GPU partitioning into isolated instances
+```
+
+### Future guest-side evidence
+
+Useful commands for a future investigation include:
+
+```bash
+lspci -nn
+lspci -vv -s <BDF>
+lspci -vvv -s <BDF>
+cat /sys/bus/pci/devices/<BDF>/vendor
+cat /sys/bus/pci/devices/<BDF>/device
+cat /sys/bus/pci/devices/<BDF>/sriov_totalvfs
+cat /sys/bus/pci/devices/<BDF>/sriov_numvfs
+readlink /sys/bus/pci/devices/<BDF>/driver
+nvidia-smi -q
+nvidia-smi -q -d PCI
+nvidia-smi topo -m
+```
+
+Not every file exists in every virtualization mode. **Absence is itself evidence** and should be recorded.
+
+### AI-factory relevance
+
+The distinction matters because GPU virtualization affects how engineers reason about:
+
+- PCIe topology and bandwidth
+- DMA and device isolation
+- NUMA locality
+- NIC/GPU locality
+- GPUDirect RDMA
+- GPU assignment and scheduling
+- performance troubleshooting
+
+This topic will be revisited when networking and distributed GPU workloads are introduced.
+
+---
+
+# 24. What Phase 01 proved
+
+Phase 01 successfully established the following layered foundation:
+
+```text
+Hardware / virtual GPU attachment
+            ↓
+PCIe visibility
+            ↓
 NVIDIA driver
-      ↓
-CUDA Toolkit
-      ↓
+            ↓
+CUDA Toolkit / runtime
+            ↓
 Real CUDA execution
-      ↓
-GPU telemetry/topology
-      ↓
-MUNGE
-      ↓
+            ↓
+GPU telemetry / topology
+            ↓
+MUNGE authentication
+            ↓
 Slurm slurmd
-      ↓
+            ↓
 GRES discovery
-      ↓
-Node registration
-      ↓
-Slurm allocation
-      ↓
+            ↓
 cgroup v2 enforcement
-      ↓
-Actual constrained GPU workload
+            ↓
+Slurm GPU scheduling
 ```
 
-That is the baseline from which subsequent phases should build.
+More specifically, the lab proved:
+
+1. The L40S was visible to Linux.
+2. The NVIDIA driver stack was operational.
+3. CUDA Toolkit 13.0 was installed and usable.
+4. CUDA code executed successfully on the real GPU.
+5. GPU stress produced measurable hardware telemetry.
+6. PCIe capability and negotiated state could be inspected.
+7. NVIDIA topology showed the expected single-L40S/no-NVLink topology.
+8. MUNGE authentication worked.
+9. Slurm discovered the L40S through GRES.
+10. CPU allocation reached Linux cpuset enforcement.
+11. Memory allocation reached Linux cgroup memory enforcement.
+12. GPU allocation reached device isolation and `CUDA_VISIBLE_DEVICES`.
+13. End-to-end `srun` GPU allocation worked.
 
 ---
 
-# 29. What remains intentionally unknown / grey areas
+# 25. What Phase 01 intentionally did not prove
 
-The manual phase is **not** considered complete knowledge of a production AI factory.
+The following are explicitly deferred:
 
-Important areas remain open:
+- Slurm accounting and historical usage
+- MariaDB / SlurmDBD integration
+- multi-node scheduling
+- MPI / PMIx integration
+- NCCL collectives
+- InfiniBand
+- GPUDirect RDMA
+- multi-GPU topology
+- distributed training
+- checkpointing under failure
+- production observability
+- high-availability controller architecture
+- automated node lifecycle
+- exact Nebius host-side GPU virtualization mechanism
 
-### GPU infrastructure
+These are not gaps to be hidden; they define the next phases of the lab.
 
-- GPU reset/recovery behavior
-- persistence mode and production policy
-- ECC/error monitoring
-- XID error handling
-- DCGM
-- GPU health checks
-- GPU failure isolation
-- MIG vs time-sharing
-- GPU sharing semantics
+---
 
-### PCIe / topology
+# 26. Phase 01 final state
 
-- performance impact of the observed virtualized PCIe negotiation
-- NUMA-aware CPU placement
-- PCIe locality on multi-GPU hosts
-- GPUDirect-related topology requirements
+The manual node:
+
+```text
+l40-node-01
+```
+
+was **deleted after the manual validation was complete**.
+
+This is intentional.
+
+The node was not converted into the next phase's compute node because doing so would blur the boundary between:
+
+```text
+manual reference implementation
+```
+
+and:
+
+```text
+reproducible automated implementation
+```
+
+The next L40S compute nodes will be fresh instances and will be configured by Ansible.
+
+---
+
+# 27. Next phase
+
+## Phase 02 — Slurm Accounting Foundation
+
+The next implementation step is to add accounting to the persistent controller:
+
+```text
+slurm-controller-01
+        │
+        ├── slurmctld
+        ├── slurmdbd
+        └── MariaDB
+```
+
+Target flow:
+
+```text
+Slurm jobs
+    ↓
+slurmctld
+    ↓
+slurmdbd
+    ↓
+MariaDB
+    ↓
+Historical job / cluster / association data
+```
+
+This accounting layer will be completed and validated **before** the final GPU nodes are rebuilt through Ansible.
+
+---
+
+# 28. Phase 01 study checklist
+
+Before moving deeper into the AI-factory stack, the following concepts should be explainable without referring back to commands:
+
+- PCIe device detection vs driver binding
+- NVIDIA driver vs CUDA Toolkit vs CUDA runtime
+- `nvidia-smi` vs actual CUDA execution
+- GPU telemetry and utilization
+- PCIe `LnkCap` vs `LnkSta`
+- NUMA and CPU/GPU locality
+- Slurm controller vs `slurmd` vs `slurmstepd`
+- Slurm GRES and `gpu:L40S`
+- MUNGE trust/authentication
+- cgroup v2 resource enforcement
+- CPU, memory, and GPU isolation
+- SR-IOV, PF, VF
+- PCIe passthrough vs SR-IOV vs vGPU vs MIG
+- why L40S and HGX H100/H200 belong to different performance-study phases
+
+---
+
+## Reference commands
+
+### NVIDIA
+
+```bash
+nvidia-smi
+nvidia-smi -L
+nvidia-smi dmon
+nvidia-smi topo -m
+nvidia-smi -q
+nvidia-smi -q -d PCI
+```
+
+### CUDA
+
+```bash
+nvcc --version
+```
+
+### PCIe / Linux
+
+```bash
+lspci -nn
+lspci -vv -s <BDF>
+lspci -vvv -s <BDF>
+lsmod | grep nvidia
+ls -l /dev/nvidia*
+```
+
+### MUNGE
+
+```bash
+systemctl is-active munge
+munge -n | unmunge
+```
 
 ### Slurm
 
-- advanced GRES configuration
-- `AutoDetect` behavior across GPU generations
-- GPU binding
-- CPU/GPU affinity
-- `--gpus`, `--gres`, and related GPU allocation semantics
-- reservations
-- QoS
-- priorities
-- fair-share
-- preemption
-- job arrays
-- advanced scheduling
-- node health checks
-- drain/undrain lifecycle
+```bash
+scontrol ping
+sinfo
+scontrol show node
+slurmd -G
+```
 
-### cgroups
+### cgroup v2
 
-- complete cgroup v2 hierarchy behavior
-- memory OOM behavior
-- swap policy
-- process cleanup
-- device ACL implementation details
-- interaction with systemd
-- batch vs interactive differences
-
-### Distributed AI
-
-- PMIx
-- MPI
-- NCCL
-- topology-aware NCCL
-- TCP vs InfiniBand transport
-- GPUDirect RDMA
-- multi-node process launch
-- distributed checkpointing
-- failed-rank recovery
-
-### Operations
-
-- SlurmDBD/MariaDB production design
-- accounting and associations
-- secrets management
-- Ansible idempotency
-- node replacement
-- automated GPU-node provisioning
-- observability
-- alerting
-- backup/recovery
-- controller HA
-
-These are deliberately carried forward as learning objectives rather than guessed at in Phase 01.
+```bash
+mount | grep cgroup
+find /sys/fs/cgroup -maxdepth 4 -type d | head -50
+```
 
 ---
 
-# 30. Manual implementation → Ansible desired state
+## Final principle
 
-The manual node now serves as the reference model for the next phase.
-
-The future automated state should reproduce the required functional properties, not merely reproduce the exact shell commands.
-
-```text
-Manual reference node
-        |
-        | lessons / validated state
-        v
-Ansible desired state
-        |
-        +--> common OS configuration
-        +--> NVIDIA baseline (where applicable)
-        +--> MUNGE
-        +--> Slurm common configuration
-        +--> controller configuration
-        +--> SlurmDBD
-        +--> MariaDB
-        +--> compute-node configuration
-        +--> GRES
-        +--> cgroups
-        +--> validation
-        |
-        v
-l40-node-01 + l40-node-02
-```
-
-The Ansible implementation should be idempotent and version-aware.
-
-Manual commands remain useful as troubleshooting tools, but the desired cluster state should live in Git-managed configuration.
-
----
-
-# 31. Future phase documentation rule
-
-From this point onward, changes should be recorded incrementally rather than rewriting history.
-
-For each significant phase, document:
-
-1. **Initial state**
-2. **Why a change is needed**
-3. **Design decision**
-4. **Configuration change**
-5. **Commands used**
-6. **Observed output/result**
-7. **Validation**
-8. **Failure/issue encountered**
-9. **Root cause**
-10. **Remediation**
-11. **What changed architecturally**
-12. **What is still unknown**
-13. **Study points**
-14. **How the change will be automated/rebuilt**
-
-This keeps the repository useful both as an operational record and as a progressive AI-infrastructure study guide.
-
----
-
-# 32. Base study model
-
-The foundation should be remembered as five layers:
-
-```text
-Layer 1 — Hardware
-    GPU / PCIe / CPU / NUMA / memory
-
-Layer 2 — NVIDIA software
-    Driver / kernel modules / CUDA / device nodes
-
-Layer 3 — Cluster security
-    MUNGE / trust / daemon authentication
-
-Layer 4 — Slurm
-    slurmctld / slurmd / GRES / scheduler / allocation
-
-Layer 5 — Linux enforcement
-    cgroup v2 / CPU / memory / device isolation
-```
-
-Later phases add:
-
-```text
-Layer 6 — Accounting
-    MariaDB / slurmdbd / associations / usage
-
-Layer 7 — Automation
-    Ansible / Git / reproducibility
-
-Layer 8 — Multi-node networking
-    Ethernet / InfiniBand / NCCL / GPUDirect RDMA
-
-Layer 9 — Distributed AI workload
-    PyTorch / torchrun / NCCL / datasets / checkpoints
-
-Layer 10 — Production operations
-    observability / failure handling / HA / lifecycle / recovery
-```
-
-The objective is not merely to operate each layer independently. The objective is to understand the **interfaces between layers** and how a failure at one layer propagates upward.
-
-For example:
-
-```text
-GPU driver failure
-      ↓
-GPU discovery failure
-      ↓
-GRES mismatch
-      ↓
-node registration/scheduling problem
-      ↓
-GPU job cannot be allocated
-```
-
-or:
-
-```text
-Slurm allocation
-      ↓
-cgroup configuration
-      ↓
-CPU/memory/GPU enforcement
-      ↓
-workload behavior
-```
-
-That layered reasoning will be the basis for troubleshooting in all later phases.
-
----
-
-## Status
-
-**Phase 01 manual GPU + Slurm foundation: completed and documented.**
-
-The original manual L40S node is now considered a **reference implementation** and may be destroyed.
-
-The next implementation phase will introduce **MariaDB + SlurmDBD**, followed by the Ansible architecture and two fresh L40S compute nodes configured from code.
+> **The objective of Phase 01 was not to create a permanent GPU node. It was to understand and prove the interfaces between the GPU hardware layer, NVIDIA software stack, Slurm, MUNGE, and Linux cgroup enforcement well enough that the next implementation can be automated without turning the automation into a black box.**
