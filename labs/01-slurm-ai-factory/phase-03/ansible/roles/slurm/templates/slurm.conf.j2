@@ -20,6 +20,11 @@ SelectType=select/cons_tres
 SelectTypeParameters=CR_CORE_MEMORY
 GresTypes=gpu
 
+# Keep the accounting configuration aligned with the controller-side cluster.
+AccountingStorageType=accounting_storage/slurmdbd
+AccountingStorageHost={{ slurm_controller_addr }}
+AccountingStoragePort=6819
+
 {% for host in groups['gpu_workers'] %}
 NodeName={{ host }} NodeAddr={{ hostvars[host].ansible_host | default(host) }} CPUs={{ hostvars[host].slurm_node_cpus | default(hostvars[host].ansible_processor_vcpus) }} RealMemory={{ hostvars[host].slurm_node_real_memory_mb | default(hostvars[host].ansible_memtotal_mb) }} Gres=gpu:{{ hostvars[host].slurm_gpu_type | default(slurm_gpu_type) }}:{{ hostvars[host].slurm_gpu_count | default(slurm_gpu_count) }} State=UNKNOWN
 {% endfor %}
