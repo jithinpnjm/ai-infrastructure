@@ -1,0 +1,3 @@
+---
+validation_require_controller_registration: false
+validation_require_cuda_compiler: false
