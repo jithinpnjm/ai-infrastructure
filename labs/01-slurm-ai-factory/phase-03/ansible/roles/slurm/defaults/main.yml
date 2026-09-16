@@ -1,0 +1,18 @@
+---
+slurm_packages:
+  - slurmd
+  - slurm-client
+  - slurm-wlm-basic-plugins
+
+slurm_conf_path: /etc/slurm/slurm.conf
+slurm_gres_conf_path: /etc/slurm/gres.conf
+slurm_cgroup_conf_path: /etc/slurm/cgroup.conf
+
+slurm_node_cpus: "{{ ansible_processor_vcpus }}"
+slurm_node_real_memory_mb: "{{ ansible_memtotal_mb }}"
+slurm_gpu_device: /dev/nvidia0
+slurm_gpu_type: "{{ gpu_expected_type }}"
+slurm_gpu_count: "{{ gpu_expected_count }}"
+
+slurm_spool_dir: /var/spool/slurmd
+slurm_log_dir: /var/log/slurm
