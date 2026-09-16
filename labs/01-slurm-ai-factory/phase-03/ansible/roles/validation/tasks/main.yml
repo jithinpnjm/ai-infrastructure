@@ -1,0 +1,87 @@
+---
+- name: Validate NVIDIA device nodes
+  ansible.builtin.stat:
+    path: /dev/nvidia0
+  register: nvidia_device
+
+- name: Require NVIDIA device node
+  ansible.builtin.assert:
+    that:
+      - nvidia_device.stat.exists
+      - nvidia_device.stat.ischr
+    fail_msg: /dev/nvidia0 is not available.
+
+- name: Validate cgroup v2 mount
+  ansible.builtin.command: stat -fc %T /sys/fs/cgroup
+  register: cgroup_fs
+  changed_when: false
+
+- name: Require cgroup2 filesystem
+  ansible.builtin.assert:
+    that:
+      - cgroup_fs.stdout == 'cgroup2fs'
+    fail_msg: >-
+      /sys/fs/cgroup is not cgroup2fs; got {{ cgroup_fs.stdout }}.
+
+- name: Validate MUNGE service
+  ansible.builtin.command: systemctl is-active munge
+  register: munge_active
+  changed_when: false
+
+- name: Require MUNGE active
+  ansible.builtin.assert:
+    that: munge_active.stdout == 'active'
+
+- name: Validate Slurm daemon
+  ansible.builtin.command: systemctl is-active slurmd
+  register: slurmd_active
+  changed_when: false
+
+- name: Require slurmd active
+  ansible.builtin.assert:
+    that: slurmd_active.stdout == 'active'
+
+- name: Validate Slurm GRES detection
+  ansible.builtin.command: slurmd -G
+  register: gres_validation
+  changed_when: false
+
+- name: Require expected GPU in Slurm GRES output
+  ansible.builtin.assert:
+    that:
+      - "'gpu:' in gres_validation.stdout"
+      - "slurm_gpu_type in gres_validation.stdout"
+    fail_msg: >-
+      Slurm GRES validation did not report the expected GPU type.
+      Output: {{ gres_validation.stdout }}
+
+- name: Validate controller reachability
+  ansible.builtin.command: scontrol ping
+  register: controller_ping
+  changed_when: false
+  failed_when: false
+
+- name: Require controller registration when enabled
+  ansible.builtin.assert:
+    that:
+      - controller_ping.rc == 0
+      - "'UP' in controller_ping.stdout"
+    fail_msg: >-
+      Slurm controller is not reachable/healthy. Output:
+      {{ controller_ping.stdout }} {{ controller_ping.stderr }}
+  when: validation_require_controller_registration | bool
+
+- name: Validate CUDA compiler when required
+  ansible.builtin.command: nvcc --version
+  register: nvcc_validation
+  changed_when: false
+  when: validation_require_cuda_compiler | bool
+
+- name: Record validation result
+  ansible.builtin.debug:
+    msg:
+      - "NVIDIA device: /dev/nvidia0 present"
+      - "cgroup filesystem: {{ cgroup_fs.stdout }}"
+      - "MUNGE: active"
+      - "slurmd: active"
+      - "GRES: validated"
