@@ -1,0 +1,5 @@
+---
+- name: Restart MUNGE
+  ansible.builtin.service:
+    name: "{{ munge_service_name }}"
+    state: restarted
