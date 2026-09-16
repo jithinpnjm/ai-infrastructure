@@ -1,0 +1,28 @@
+---
+- name: Install common worker prerequisites
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Configure lab timezone
+  community.general.timezone:
+    name: "{{ base_timezone }}"
+
+- name: Verify systemd is available
+  ansible.builtin.command: systemctl --version
+  changed_when: false
+
+- name: Verify unified cgroup hierarchy exists
+  ansible.builtin.stat:
+    path: /sys/fs/cgroup/cgroup.controllers
+  register: cgroup_v2_marker
+
+- name: Require cgroup v2
+  ansible.builtin.assert:
+    that:
+      - cgroup_v2_marker.stat.exists
+    fail_msg: >-
+      cgroup v2 is not available. The GPU worker design requires the unified
+      cgroup hierarchy for Slurm task isolation.
