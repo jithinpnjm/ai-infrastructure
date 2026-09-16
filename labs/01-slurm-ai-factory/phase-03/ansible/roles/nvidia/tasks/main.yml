@@ -1,0 +1,51 @@
+---
+- name: Install NVIDIA driver packages when explicitly enabled
+  ansible.builtin.apt:
+    name: "{{ nvidia_driver_packages }}"
+    state: present
+    update_cache: true
+  when:
+    - nvidia_manage_driver | bool
+    - nvidia_driver_packages | length > 0
+
+- name: Install CUDA toolkit packages when explicitly enabled
+  ansible.builtin.apt:
+    name: "{{ nvidia_cuda_packages }}"
+    state: present
+    update_cache: true
+  when:
+    - nvidia_manage_cuda_toolkit | bool
+    - nvidia_cuda_packages | length > 0
+
+- name: Check NVIDIA management utility
+  ansible.builtin.command: nvidia-smi --query-gpu=name --format=csv,noheader
+  register: nvidia_smi
+  changed_when: false
+
+- name: Require expected GPU count
+  ansible.builtin.assert:
+    that:
+      - nvidia_smi.stdout_lines | length == (nvidia_expected_gpu_count | int)
+    fail_msg: >-
+      Expected {{ nvidia_expected_gpu_count }} NVIDIA GPU(s), but nvidia-smi
+      reported {{ nvidia_smi.stdout_lines | length }}.
+
+- name: Require expected GPU model
+  ansible.builtin.assert:
+    that:
+      - nvidia_expected_gpu_type in nvidia_smi.stdout
+    fail_msg: >-
+      Expected GPU type containing '{{ nvidia_expected_gpu_type }}', but
+      nvidia-smi reported: {{ nvidia_smi.stdout | trim }}
+
+- name: Check CUDA compiler when present
+  ansible.builtin.command: nvcc --version
+  register: nvcc_version
+  changed_when: false
+  failed_when: false
+
+- name: Record CUDA compiler state
+  ansible.builtin.debug:
+    msg: >-
+      nvcc validation: {{ 'available' if nvcc_version.rc == 0 else
+      'not available; CUDA runtime/driver validation continues' }}
