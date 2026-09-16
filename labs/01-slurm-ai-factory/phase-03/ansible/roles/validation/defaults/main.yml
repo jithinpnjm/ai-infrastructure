@@ -1,3 +1,6 @@
 ---
 validation_require_controller_registration: false
 validation_require_cuda_compiler: false
+
+slurm_gpu_type: "{{ gpu_expected_type }}"
+slurm_gpu_count: "{{ gpu_expected_count }}"
