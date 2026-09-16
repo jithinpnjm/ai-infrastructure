@@ -1,0 +1,10 @@
+---
+# Group-level worker policy. Host-specific hardware values belong in host vars
+# after Phase 04 provisions and verifies the actual machines.
+validation_require_controller_registration: false
+validation_require_cuda_compiler: false
+
+# The Nebius GPU image is expected to provide the driver. Keep installation
+# opt-in so the role cannot unexpectedly replace a vendor-supplied driver.
+nvidia_manage_driver: false
+nvidia_manage_cuda_toolkit: false
