@@ -1,0 +1,11 @@
+---
+# Phase 03 assumes the Nebius GPU image provides the NVIDIA driver.
+# The role validates the GPU stack rather than silently installing a driver.
+nvidia_manage_driver: false
+nvidia_manage_cuda_toolkit: false
+
+nvidia_driver_packages: []
+nvidia_cuda_packages: []
+
+nvidia_expected_gpu_type: "{{ gpu_expected_type }}"
+nvidia_expected_gpu_count: "{{ gpu_expected_count }}"
