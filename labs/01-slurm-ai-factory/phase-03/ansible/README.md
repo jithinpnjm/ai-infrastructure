@@ -4,51 +4,32 @@ This directory contains the configuration-management layer for GPU worker onboar
 
 ## Current state
 
-Phase 03 is being built incrementally. The first commit establishes the Ansible execution defaults and lab inventory model without provisioning or modifying any GPU worker.
+The Ansible implementation is now complete enough to be reviewed and syntax-validated **without provisioning or modifying a GPU VM**.
 
 ```text
 ansible/
 ├── ansible.cfg
+├── requirements.yml
 ├── inventories/
 │   └── lab/
 │       ├── hosts.yml
 │       └── group_vars/
-│           └── all.yml
-├── playbooks/       # added as implementation progresses
-└── roles/           # added as implementation progresses
+│           ├── all.yml
+│           └── gpu_workers.yml
+├── playbooks/
+│   ├── gpu-node.yml
+│   └── validate-gpu-node.yml
+├── roles/
+│   ├── base/
+│   ├── nvidia/
+│   ├── munge/
+│   ├── slurm/
+│   └── validation/
+└── secrets/
+    └── README.md
 ```
 
-## Architectural rules
-
-- Nebius provisions the VM, GPU, network and storage.
-- Ansible configures the operating system and GPU worker software stack.
-- Slurm controls resource allocation and workload scheduling.
-- Inventory describes hosts and topology; roles describe desired state.
-- Secrets are never committed to Git.
-- Hardware-specific values must be verified against the actual node rather than blindly trusted from a cloud preset.
-- Validation is a first-class part of convergence; a successful playbook run alone is not acceptance.
-
-## Lab target
-
-The next compute stage will use two Nebius L40S workers:
-
-```text
-                 slurm-controller-01
-                       10.0.0.4
-                           │
-                    Slurm / MUNGE
-                           │
-              ┌────────────┴────────────┐
-              │                         │
-        l40-node-01               l40-node-02
-          L40S × 1                  L40S × 1
-```
-
-The actual worker addresses will be added only after the Phase 04 VMs are provisioned and their network identity is verified.
-
-## Next implementation step
-
-Create the Ansible role skeleton and define the execution order:
+## Execution order
 
 ```text
 base
@@ -62,4 +43,84 @@ slurm
 validation
 ```
 
-The MUNGE secret-handling mechanism must be settled before the `munge` role is implemented.
+The roles intentionally separate generic OS preparation, GPU validation, cluster authentication, Slurm worker configuration and acceptance testing.
+
+## What is automated
+
+### Base
+
+- common packages
+- timezone
+- systemd presence
+- cgroup v2 prerequisite
+
+### NVIDIA
+
+- optional package installation, disabled by default for the Nebius preconfigured GPU image
+- `nvidia-smi` GPU count/model validation
+- optional `nvcc` visibility check
+
+The role does not blindly replace a vendor-provided driver.
+
+### MUNGE
+
+- package installation
+- trusted cluster key deployment
+- ownership and mode enforcement
+- service state
+- local encode/decode validation
+
+The MUNGE key is supplied out-of-band from the Ansible controller. It is never stored in Git.
+
+### Slurm
+
+- worker packages
+- spool/log directories
+- `slurm.conf`
+- `gres.conf` with NVML discovery
+- cgroup configuration
+- `slurmd -C` validation
+- `slurmd -G` validation
+- service state
+
+The generated worker configuration describes all hosts in the `gpu_workers` inventory group so the workers share a consistent node view.
+
+### Validation
+
+Standalone validation checks:
+
+- NVIDIA device node
+- cgroup v2
+- MUNGE service
+- Slurm service
+- GRES detection
+- optional controller reachability
+- optional CUDA compiler
+
+Controller registration and real GPU-job validation remain runtime acceptance tests and require actual infrastructure.
+
+## Secrets
+
+Do not commit the MUNGE key. The expected controller-local path is:
+
+```text
+phase-03/ansible/secrets/munge.key
+```
+
+The repository-wide `.gitignore` excludes `*.key` files.
+
+## Static validation without a GPU VM
+
+Run from the repository root:
+
+```bash
+bash labs/01-slurm-ai-factory/phase-03/tools/validate-ansible.sh
+```
+
+If `ansible-playbook` is installed, the script also runs syntax checks for both playbooks. Otherwise it performs the structural checks and clearly reports that syntax validation was skipped.
+
+## Runtime boundary
+
+No GPU VM is required to build or review this code.
+
+When Phase 04 eventually provisions the two L40S workers, inventory will be populated with their verified addresses and hardware facts. The first runtime execution will then be a controlled convergence test, followed by idempotency and Slurm registration validation.
