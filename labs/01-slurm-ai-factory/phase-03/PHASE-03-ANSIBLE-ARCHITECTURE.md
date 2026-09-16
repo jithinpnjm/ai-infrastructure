@@ -1,19 +1,19 @@
-# Phase 03 — Ansible Architecture
+# Phase 03 — Ansible Architecture and Implementation
 
 ## Objective
 
-Design and implement a production-shaped Ansible configuration-management layer for onboarding GPU compute nodes into the AI factory.
+Build a production-shaped Ansible configuration-management layer for onboarding GPU compute nodes into the AI factory.
 
-The objective is not simply to automate package installation. The objective is to make a fresh GPU node reproducibly and idempotently converge to a validated Slurm worker:
+The target convergence chain is:
 
 ```text
 Fresh GPU VM
     ↓
 Ansible
     ↓
-OS / prerequisites
+OS prerequisites
     ↓
-NVIDIA + CUDA
+NVIDIA + CUDA validation
     ↓
 MUNGE
     ↓
@@ -23,312 +23,198 @@ cgroup v2
     ↓
 Validation
     ↓
-Slurm IDLE
+Slurm worker ready
 ```
 
-## Why This Phase Exists
-
-Phase 01 deliberately used manual configuration to understand the GPU-node stack. Manual work was valuable for learning the relationship between the NVIDIA driver, CUDA, MUNGE, Slurm, GRES and cgroup v2, but it is not an acceptable operational model for repeatedly onboarding production GPU nodes.
-
-Phase 03 turns that learned configuration into a reproducible desired state.
-
-The goal is to be able to destroy a worker and rebuild it from the documented configuration without depending on undocumented shell history or one-off fixes.
+Phase 01 intentionally built one L40S worker manually so the dependency chain could be understood. Phase 03 converts that learned configuration into repeatable, idempotent configuration management.
 
 ## Architectural Boundary
 
-Cloud provisioning, configuration management and workload orchestration are deliberately separate concerns.
-
-### Cloud provisioning
-
-Nebius is responsible for creating and exposing the infrastructure:
-
-- VM
-- GPU attachment
-- network interfaces
-- storage
-- SSH access
-- cloud-level lifecycle
-
-### Configuration management
-
-Ansible is responsible for the state inside the VM:
-
-- operating-system prerequisites
-- NVIDIA validation/configuration
-- CUDA
-- MUNGE
-- Slurm worker
-- GRES
-- cgroup v2
-- service configuration
-- validation
-
-### Workload orchestration
-
-Slurm is responsible for:
-
-- resource allocation
-- job scheduling
-- CPU and memory allocation
-- GPU allocation
-- accounting integration
-
-Keeping these boundaries explicit prevents a single automation layer from becoming responsible for the entire platform.
-
-## Why Ansible
-
-A GPU worker is a dependency chain rather than a collection of unrelated packages:
-
 ```text
-GPU / PCIe exposure
-        ↓
-NVIDIA driver
-        ↓
-CUDA runtime/toolkit
-        ↓
-MUNGE trust/authentication
-        ↓
-Slurm daemon
-        ↓
-GRES GPU resource definition
-        ↓
-cgroup v2 resource/device enforcement
+Nebius
+  → VM / GPU / network / storage / lifecycle
+
+Ansible
+  → OS / NVIDIA / MUNGE / Slurm worker / GRES / cgroup / validation
+
+Slurm
+  → scheduling / CPU / memory / GPU allocation / accounting integration
 ```
 
-A change at one layer can affect another. Ansible gives us a declarative, repeatable mechanism to converge a fresh node toward the desired state and to detect configuration drift.
+Nebius provisioning is deliberately not part of this phase. Terraform and cloud API automation are deferred.
 
-## Production Model
-
-A company may have many GPU nodes. The automation should therefore be based on **roles and inventory**, not on individual host names.
-
-For example:
-
-```text
-                  Ansible Controller
-                         │
-          ┌──────────────┼──────────────┐
-          ▼              ▼              ▼
-      GPU node 01    GPU node 02    GPU node N
-          │              │              │
-       same role      same role      same role
-          │              │              │
-          └──────────────┴──────────────┘
-                         │
-                   Slurm cluster
-```
-
-Host-specific differences should be represented as inventory variables rather than copied playbooks.
-
-## Planned Repository Structure
-
-The structure will be introduced incrementally so every directory and role has a documented purpose.
+## Repository Implementation
 
 ```text
 phase-03/
 ├── PHASE-03-ANSIBLE-ARCHITECTURE.md
+├── tools/
+│   └── validate-ansible.sh
 └── ansible/
     ├── ansible.cfg
+    ├── requirements.yml
     ├── inventories/
     │   └── lab/
     │       ├── hosts.yml
     │       └── group_vars/
+    │           ├── all.yml
+    │           └── gpu_workers.yml
     ├── playbooks/
     │   ├── gpu-node.yml
     │   └── validate-gpu-node.yml
-    └── roles/
-        ├── base/
-        ├── nvidia/
-        ├── munge/
-        ├── slurm/
-        └── validation/
+    ├── roles/
+    │   ├── base/
+    │   ├── nvidia/
+    │   ├── munge/
+    │   ├── slurm/
+    │   └── validation/
+    └── secrets/
+        └── README.md
 ```
 
-This is a target structure, not a requirement to create empty directories immediately.
+## Role Execution Order
 
-## Roles and Responsibilities
+```text
+base
+  ↓
+nvidia
+  ↓
+munge
+  ↓
+slurm
+  ↓
+validation
+```
 
 ### `base`
 
-Owns generic worker prerequisites such as packages, users, directories and operating-system settings that are genuinely common to all GPU workers.
-
-It should not contain NVIDIA- or Slurm-specific logic.
+Installs common worker prerequisites, establishes the lab timezone, verifies systemd and requires the unified cgroup hierarchy.
 
 ### `nvidia`
 
-Owns validation and, where required, configuration of the NVIDIA driver/CUDA layer.
+The lab will use Nebius' preconfigured GPU image. Therefore driver installation is **opt-in**, not automatic.
 
-The role must verify the actual GPU rather than assuming that package installation means the GPU is usable.
+The role validates the actual GPU with `nvidia-smi`, including expected GPU count and model. CUDA compiler availability can also be checked.
 
-Examples of validation include:
-
-```bash
-nvidia-smi
-nvidia-smi -L
-nvcc --version
-```
+This avoids replacing a vendor-supplied driver merely because Ansible was executed.
 
 ### `munge`
 
-Owns MUNGE installation, key deployment, permissions and service state.
+Installs MUNGE, deploys the trusted cluster key, enforces ownership/mode, starts the service and validates `munge -n | unmunge`.
 
-The MUNGE key is a secret and must never be committed to Git.
+The MUNGE key is never committed to Git.
 
 ### `slurm`
 
-Owns the worker-side Slurm configuration and `slurmd` service.
+Installs the worker packages and generates:
 
-Controller configuration remains a separate concern.
+- `/etc/slurm/slurm.conf`
+- `/etc/slurm/gres.conf`
+- `/etc/slurm/cgroup.conf`
+
+The worker configuration uses the lab cluster name/controller, `auth/munge`, `select/cons_tres`, `CR_CORE_MEMORY`, GPU GRES and cgroup task plugins.
+
+`slurm.conf` is generated from the complete `gpu_workers` inventory group so worker nodes have a consistent view of the cluster. Hardware-specific CPU/memory values can be overridden after the actual VM is verified.
+
+`gres.conf` uses NVML discovery and validates the expected L40S GPU and device file.
+
+The cgroup configuration carries forward the Phase 01 validated controls:
+
+```text
+ConstrainCores=yes
+ConstrainDevices=yes
+ConstrainRAMSpace=yes
+ConstrainSwapSpace=yes
+```
 
 ### `validation`
 
-Provides explicit post-convergence checks. A successful Ansible run is not itself proof that the GPU worker is operational.
+Validation is a first-class acceptance layer. It checks:
 
-Validation should eventually cover:
-
-- NVIDIA device visibility
-- CUDA
-- MUNGE encode/decode
-- `slurmd`
-- `slurmd -G`
+- `/dev/nvidia0`
 - cgroup v2
-- controller registration
-- Slurm GPU allocation
+- MUNGE service
+- Slurm service
+- `slurmd -G`
+- optional controller reachability
+- optional `nvcc`
 
-## Inventory Design
+A separate validation playbook allows the validation role to be rerun without reconverging the entire node.
 
-Inventory describes **what infrastructure exists** and how Ansible reaches it.
+## Inventory Model
 
-Example conceptual grouping:
+The lab inventory intentionally contains **zero GPU hosts right now**.
+
+The intended shape is:
 
 ```yaml
 gpu_workers:
   hosts:
     l40-node-01:
+      ansible_host: <verified-private-ip>
     l40-node-02:
+      ansible_host: <verified-private-ip>
 ```
 
-The actual inventory will contain connection details appropriate to the lab while avoiding hard-coded secrets.
+The addresses and hardware overrides will only be populated after Phase 04 creates the actual Nebius instances.
 
-Inventory should describe topology and host identity; roles should describe desired state.
+This keeps infrastructure discovery separate from configuration logic and avoids inventing hardware facts.
 
-## Variables
+## Secret Boundary
 
-Variables will separate reusable logic from environment-specific values.
+Git contains configuration and references, never secret material.
 
-Examples include:
+For the current lab implementation the MUNGE key is supplied out-of-band on the Ansible controller at:
 
-- Slurm cluster name
-- controller address
-- Slurm ports
-- GPU type
-- expected GPU count
-- expected CPU count
-- expected memory
-- package versions where pinning is justified
+```text
+phase-03/ansible/secrets/munge.key
+```
 
-A value should be variable-driven when it is legitimately environment- or hardware-specific. We should not turn every constant into a variable merely for the sake of abstraction.
+`*.key` is already excluded by the repository `.gitignore`.
 
-## Secrets Boundary
-
-Secrets must not be stored in plain text in the repository.
-
-Examples:
-
-- MUNGE key
-- database credentials
-- private SSH material
-
-The exact secret-management mechanism will be selected before implementation. For the lab, the important architectural requirement is that Git contains the configuration and references, not secret material.
+The repository documents this boundary without storing the key. Ansible Vault or an external secret manager can replace the controller-local mechanism later if the lab evolves into a multi-user automation service.
 
 ## Idempotency
 
-Running the same playbook twice should converge to the same state rather than repeatedly modifying the machine.
-
-For example:
+The design target is:
 
 ```text
-First run  → changed resources
+First run  → resources/configuration converge
 Second run → ideally changed=0
 ```
 
-However, `changed=0` is not sufficient validation. The resulting system must still be tested from the operating-system and Slurm perspectives.
+Idempotency is not considered proven until a real worker has been converged twice and the second run is inspected.
 
-## Validation Philosophy
+## Offline Validation
 
-Every major layer should have a validation gate.
+The implementation can be checked without any GPU VM:
 
-Examples:
-
-```text
-NVIDIA
-  → nvidia-smi
-
-CUDA
-  → nvcc / CUDA workload validation
-
-MUNGE
-  → munge -n | unmunge
-
-Slurm worker
-  → systemctl / slurmd
-
-GRES
-  → slurmd -G
-
-cgroup
-  → /sys/fs/cgroup inspection
-
-Cluster
-  → sinfo / scontrol
-
-Workload
-  → actual Slurm GPU job
+```bash
+bash labs/01-slurm-ai-factory/phase-03/tools/validate-ansible.sh
 ```
 
-The final workload test is particularly important because it proves the complete chain rather than individual components in isolation.
+The script verifies the expected repository tree and, when `ansible-playbook` is installed, runs syntax checks for both playbooks.
 
-## Failure and Recovery Model
+No GPU VM is required for this phase of implementation.
 
-For each major automation stage we will eventually document:
+## Runtime Validation Deferred
 
-1. expected state
-2. failure mode
-3. observable symptom
-4. diagnostic command
-5. remediation
-6. recovery validation
+The following cannot be truthfully marked complete without a real worker:
 
-We will not invent failure behavior. Failure scenarios will be tested against real infrastructure when the relevant nodes exist.
+- actual Ansible convergence
+- second-run idempotency
+- controller registration
+- `sinfo`/`scontrol` node state
+- real Slurm GPU allocation
+- cgroup GPU isolation under a job
+- MUNGE cross-node authentication
+- failure/recovery tests
 
-## Rebuildability
+These are runtime acceptance tests for the next compute stage, not reasons to delay completion of the Ansible code itself.
 
-The final Phase 03 implementation should allow a fresh GPU VM to be configured without repeating the manual Phase 01 procedure.
+## Relationship to Phase 02
 
-Expensive compute resources should remain easy to destroy and recreate. Persistent low-cost artifacts such as Git configuration and other deliberately retained state should provide the rebuild source of truth.
-
-The manually configured Phase 01 `l40-node-01` was intentionally deleted and must not be recreated merely for this phase.
-
-## Explicitly Deferred
-
-The following are outside the initial Phase 03 implementation:
-
-- Nebius VM provisioning automation
-- Terraform
-- GitHub Actions automation
-- distributed training
-- NCCL
-- InfiniBand
-- NVLink/NVSwitch
-- Kubernetes
-- Run:ai
-- Microsoft Entra ID integration
-- production identity federation
-
-These will be introduced at the appropriate architecture boundaries.
-
-## Relationship to Slurm Accounting
-
-Phase 02 established the accounting model:
+Phase 02 established:
 
 ```text
 Cluster
@@ -342,61 +228,48 @@ QOS / TRES policy
 Resource allocation
 ```
 
-Phase 03 does not replace that model. It automates the **compute-node side** that ultimately consumes the resources governed by that model.
+Phase 03 automates the worker side that supplies those allocatable resources. It does not replace the accounting plane.
 
-The controller/accounting plane and worker plane remain intentionally distinct.
+## Explicitly Deferred
 
-## Future Enterprise Identity Integration
+- Nebius VM provisioning automation
+- Terraform
+- GitHub Actions automation
+- distributed training
+- NCCL
+- InfiniBand
+- NVLink/NVSwitch
+- Kubernetes
+- Run:ai
+- Microsoft Entra ID integration
+- production identity federation
 
-A production organization may use Microsoft Entra ID or another enterprise identity provider for authentication and group membership.
+These remain separate architecture phases.
 
-That identity system should not be confused with Slurm's accounting objects.
+## Status
 
-Conceptually:
+**Architecture:** COMPLETE
 
-```text
-Microsoft Entra ID
-        ↓
-Enterprise identity / groups
-        ↓
-Linux identity and access
-        ↓
-Slurm user + account associations
-        ↓
-QOS / resource policy
-        ↓
-GPU allocation
-```
+**Ansible implementation:** COMPLETE for offline/static review
 
-A single user may legitimately have access to multiple Slurm accounts, and a single Slurm account may contain many users. Multiple Slurm clusters can also share a central accounting service.
+**Static validation tooling:** COMPLETE
 
-This is deferred until the identity/multi-tenancy phase so that we first establish the infrastructure fundamentals.
+**GPU worker onboarding:** DEFERRED to Phase 04
 
-## Phase Status
+**Runtime/idempotency validation:** DEFERRED until real workers exist
 
-**Architecture:** IN PROGRESS
+**Failure/recovery testing:** DEFERRED until real workers and workloads exist
 
-**Implementation:** NOT STARTED
+## Acceptance Boundary
 
-**GPU worker onboarding:** NOT STARTED
+Phase 03 is considered complete as a code/architecture phase when:
 
-**Validation:** NOT STARTED
-
-**Failure testing:** DEFERRED until real compute nodes exist.
-
-## Phase 03 Acceptance Criteria
-
-Phase 03 will not be considered complete until:
-
-- the Ansible repository structure is implemented
-- a fresh GPU worker can be configured reproducibly
+- repository structure exists
 - roles are separated by responsibility
 - secrets are excluded from Git
-- the playbook is demonstrably idempotent
-- GPU/NVIDIA state is validated
-- MUNGE state is validated
-- Slurm/GRES/cgroup state is validated
-- controller registration is validated against real workers
-- rebuild steps are documented
-- encountered failures and fixes are recorded
-- the final architecture is documented
+- playbooks and templates are implemented
+- offline validation is available
+- rebuild/convergence flow is documented
+- runtime tests are explicitly identified as deferred rather than falsely marked successful
+
+The next phase can therefore provision the two L40S workers and exercise this automation against real infrastructure.
