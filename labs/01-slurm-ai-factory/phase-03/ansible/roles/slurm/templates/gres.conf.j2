@@ -1,0 +1,5 @@
+# Managed by Ansible.
+# NVIDIA NVML discovery validates the configured GPU model/count.
+AutoDetect=nvml
+
+Name=gpu Type={{ slurm_gpu_type }} Count={{ slurm_gpu_count }} File={{ slurm_gpu_device }}
