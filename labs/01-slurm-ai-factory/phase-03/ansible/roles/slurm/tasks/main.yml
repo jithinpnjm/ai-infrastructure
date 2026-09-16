@@ -1,0 +1,74 @@
+---
+- name: Install Slurm worker packages
+  ansible.builtin.apt:
+    name: "{{ slurm_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create Slurm log directory
+  ansible.builtin.file:
+    path: "{{ slurm_log_dir }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: '0755'
+
+- name: Create Slurm spool directory
+  ansible.builtin.file:
+    path: "{{ slurm_spool_dir }}"
+    state: directory
+    owner: slurm
+    group: slurm
+    mode: '0755'
+
+- name: Deploy worker slurm.conf
+  ansible.builtin.template:
+    src: slurm.conf.j2
+    dest: "{{ slurm_conf_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart slurmd
+
+- name: Deploy worker gres.conf
+  ansible.builtin.template:
+    src: gres.conf.j2
+    dest: "{{ slurm_gres_conf_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart slurmd
+
+- name: Deploy cgroup.conf
+  ansible.builtin.template:
+    src: cgroup.conf.j2
+    dest: "{{ slurm_cgroup_conf_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart slurmd
+
+- name: Validate generated Slurm configuration
+  ansible.builtin.command: slurmd -C
+  register: slurmd_config_check
+  changed_when: false
+
+- name: Validate generated GRES configuration
+  ansible.builtin.command: slurmd -G
+  register: slurmd_gres_check
+  changed_when: false
+
+- name: Enable and start slurmd
+  ansible.builtin.service:
+    name: slurmd
+    enabled: true
+    state: started
+
+- name: Wait for slurmd to remain active
+  ansible.builtin.command: systemctl is-active slurmd
+  register: slurmd_active
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: slurmd_active.stdout == 'active'
