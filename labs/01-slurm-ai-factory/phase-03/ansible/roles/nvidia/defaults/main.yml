@@ -9,3 +9,4 @@ nvidia_cuda_packages: []
 
 nvidia_expected_gpu_type: "{{ gpu_expected_type }}"
 nvidia_expected_gpu_count: "{{ gpu_expected_count }}"
+nvidia_expected_driver_version: "{{ gpu_expected_driver_version }}"
