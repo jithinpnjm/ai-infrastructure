@@ -1,6 +1,6 @@
 ---
 # Lab-wide variables shared by GPU workers.
-# Hardware-specific values belong in host/group variables only when required.
+# Hardware-specific values are populated from verified worker state.
 
 slurm_cluster_name: ai-factory-lab
 slurm_controller_host: slurm-controller-01
@@ -8,10 +8,10 @@ slurm_controller_addr: 10.0.0.4
 slurmctld_port: 6817
 slurmd_port: 6818
 
-# Phase 04 will replace these placeholders with values verified from the
-# provisioned GPU nodes rather than assumed from the VM preset alone.
+# Verified against the two Phase 04 L40S workers.
 gpu_expected_type: L40S
 gpu_expected_count: 1
+gpu_expected_driver_version: "580.173.02"
 
 # Do not put MUNGE keys, passwords, private keys, or cloud credentials here.
-# Secret handling will be implemented before MUNGE automation is added.
+# Secret handling remains controller-local / out-of-band.
