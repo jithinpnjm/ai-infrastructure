@@ -4,7 +4,7 @@
 
 slurm_cluster_name: ai-factory-lab
 slurm_controller_host: slurm-controller-01
-slurm_controller_addr: 10.0.0.4
+slurm_controller_addr: 10.0.0.0
 slurmctld_port: 6817
 slurmd_port: 6818
 
