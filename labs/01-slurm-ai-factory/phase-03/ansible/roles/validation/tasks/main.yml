@@ -46,14 +46,18 @@
   register: gres_validation
   changed_when: false
 
+- name: Build combined GRES validation output
+  ansible.builtin.set_fact:
+    gres_validation_output: "{{ (gres_validation.stdout | default('')) ~ '\n' ~ (gres_validation.stderr | default('')) }}"
+
 - name: Require expected GPU in Slurm GRES output
   ansible.builtin.assert:
     that:
-      - "'gpu:' in gres_validation.stdout"
-      - "slurm_gpu_type in gres_validation.stdout"
+      - "'Gres Name=gpu' in gres_validation_output"
+      - "slurm_gpu_type in gres_validation_output"
     fail_msg: >-
       Slurm GRES validation did not report the expected GPU type.
-      Output: {{ gres_validation.stdout }}
+      Combined output: {{ gres_validation_output | trim }}
 
 - name: Validate controller reachability
   ansible.builtin.command: scontrol ping
