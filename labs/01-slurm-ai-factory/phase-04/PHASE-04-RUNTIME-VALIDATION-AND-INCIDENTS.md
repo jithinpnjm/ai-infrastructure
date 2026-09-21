@@ -1022,3 +1022,1105 @@ rebuild implication
 Do not convert an observed symptom into an assumed root cause.
 
 This is the standard for all subsequent AI-factory phases.
+
+
+---
+
+# Detailed Learning Appendix — Exact Runtime Troubleshooting Record
+
+> This appendix is intentionally verbose. It records the actual commands and observations from the runtime session so the phase can be studied later, not merely remembered as "the cluster worked".
+
+## A. Starting point
+
+The two workers were:
+
+| Node | IP | GPU |
+|---|---|---|
+| l40-node-01 | 10.0.0.57 | NVIDIA L40S |
+| l40-node-02 | 10.0.0.36 | NVIDIA L40S |
+
+The verified GPU baseline was:
+
+~~~
+Driver: 580.173.02
+CUDA:   13.0
+Memory: 46068 MiB
+Kernel: 6.11.0-1016-nvidia
+OS: Ubuntu 24.04
+~~~
+
+The workers were intentionally managed through Ansible rather than being configured manually.
+
+The controller logical name was:
+
+~~~
+slurm-controller-01
+~~~
+
+---
+
+## B. Ansible convergence — what we were actually proving
+
+The playbook was executed from:
+
+~~~
+/tmp/ai-infrastructure/labs/01-slurm-ai-factory/phase-03/ansible
+~~~
+
+Command:
+
+~~~bash
+ansible-playbook -i inventories/lab/hosts.yml playbooks/gpu-node.yml
+~~~
+
+The playbook was structured as:
+
+~~~
+base
+  ↓
+nvidia
+  ↓
+munge
+  ↓
+slurm
+  ↓
+validation
+~~~
+
+The final worker validation printed:
+
+~~~
+NVIDIA device: /dev/nvidia0 present
+cgroup filesystem: cgroup2fs
+MUNGE: active
+slurmd: active
+GRES: validated
+~~~
+
+### Important learning point
+
+This result only proves that the **worker-side configuration converged and its local checks passed**.
+
+It does not yet prove:
+
+~~~
+slurmd
+  ↓
+network
+  ↓
+MUNGE
+  ↓
+slurmctld
+  ↓
+node registration
+~~~
+
+That had to be tested separately.
+
+---
+
+## C. Hostname problem — exact reasoning
+
+The Nebius VM had a generated hostname rather than the intended logical name.
+
+The intended Slurm identity was:
+
+~~~
+l40-node-01
+~~~
+
+The generated cloud identity looked like:
+
+~~~
+computeinstance-e00bb19dy3vzevy11a
+~~~
+
+The failure surfaced while working with:
+
+~~~bash
+slurmd -G
+~~~
+
+### Why this matters
+
+Slurm has a node identity model. The controller configuration says which node it expects, while slurmd reports who it is.
+
+If the OS hostname and Slurm configuration disagree, diagnostics such as GRES discovery and registration can become confusing.
+
+### What we changed
+
+The Ansible base role was changed to derive the OS hostname from the inventory hostname.
+
+Result:
+
+~~~
+l40-node-01
+l40-node-02
+~~~
+
+Commit:
+
+~~~
+0bbd50c57c85b41d3fd9ff27a9b7fb1d3412ab58
+~~~
+
+### Learning
+
+Do not use a cloud-generated hostname as an implicit cluster identity.
+
+Keep:
+
+~~~
+cloud VM identity
+        ↓
+replaceable
+
+Slurm logical identity
+        ↓
+stable
+~~~
+
+---
+
+## D. GRES validation problem — stdout versus stderr
+
+The next problem was in the Ansible validation logic.
+
+Manual execution of:
+
+~~~bash
+slurmd -G
+~~~
+
+showed valid information, but the Ansible validation did not see it because useful output was emitted on stderr.
+
+### Why this is a real automation problem
+
+A shell command has at least three useful signals:
+
+~~~text
+exit status
+stdout
+stderr
+~~~
+
+A validation task that checks only stdout can produce:
+
+~~~text
+command succeeded
++
+stdout empty
+=
+false failure
+~~~
+
+### Fix
+
+The validation role was changed to combine stdout and stderr before matching the expected GRES output.
+
+Commit:
+
+~~~
+0280344a98d6ecfabab8f7de6609dc053d46bce1
+~~~
+
+### Learning
+
+When turning manual infrastructure diagnostics into Ansible, always inspect how the command actually emits evidence.
+
+Do not assume that "diagnostic output" means stdout.
+
+---
+
+## E. Controller snapshot recovery — network identity changed
+
+The controller was snapshot-restored/recreated.
+
+Before the restore:
+
+~~~text
+10.0.0.4
+~~~
+
+After the restore:
+
+~~~text
+10.0.0.0
+~~~
+
+The logical hostname also had to be restored:
+
+~~~bash
+hostnamectl set-hostname slurm-controller-01
+~~~
+
+### Why this mattered
+
+The workers still had configuration referring to:
+
+~~~text
+SlurmctldHost=slurm-controller-01(10.0.0.4)
+~~~
+
+The real controller was now at:
+
+~~~text
+10.0.0.0
+~~~
+
+Therefore the worker configuration was stale.
+
+### Correct recovery principle
+
+A disk snapshot contains disk state.
+
+A newly created VM can have a different:
+
+- private IP;
+- hostname;
+- network interface identity.
+
+Therefore after snapshot recovery always run:
+
+~~~bash
+hostname -f
+ip -br addr
+ip route
+~~~
+
+before assuming the old configuration is still valid.
+
+### Fix
+
+The Git-managed variable was changed to:
+
+~~~yaml
+slurm_controller_addr: 10.0.0.0
+~~~
+
+Commit:
+
+~~~
+2122d2ea36b63168cbae1c0769261362a02b3673
+~~~
+
+Then the worker playbook was rerun.
+
+---
+
+## F. Registration failure — INVALID_REG
+
+After the controller-address correction, the scheduler still did not accept the workers.
+
+The controller showed:
+
+~~~text
+State=DOWN+INVALID_REG
+~~~
+
+with:
+
+~~~text
+Reason=Low socket*core*thread count, Low CPUs,
+Low RealMemory (reported:32094 < 100.00% of configured:96556)
+~~~
+
+### The critical numbers
+
+The controller's stale definition expected approximately:
+
+~~~text
+CPUs=16
+RealMemory=96556
+~~~
+
+The worker registered with:
+
+~~~text
+CPUs=8
+RealMemory=32094
+~~~
+
+### What this means
+
+This is a **resource-contract mismatch**.
+
+The controller says:
+
+~~~text
+"This node must provide at least this much capacity."
+~~~
+
+The worker says:
+
+~~~text
+"I actually have this much capacity."
+~~~
+
+When the worker is below the configured requirement, Slurm rejects the registration rather than silently scheduling against incorrect capacity.
+
+### What this is NOT
+
+It is not evidence that:
+
+- the NVIDIA GPU is broken;
+- the driver is broken;
+- CUDA is broken;
+- GRES is necessarily broken.
+
+It is specifically a node topology/resource configuration problem.
+
+---
+
+## G. The correct way to determine worker topology
+
+The important command is:
+
+~~~bash
+slurmd -C
+~~~
+
+This should be run on the worker.
+
+It is better evidence than copying CPU and memory numbers from:
+
+- an old VM;
+- a cloud product specification;
+- a previous controller;
+- memory;
+- assumptions about hyperthreading.
+
+### Why this matters
+
+The controller needs the hardware model **as Slurm sees it**, not merely the advertised cloud instance model.
+
+The correct troubleshooting loop is:
+
+~~~text
+worker
+  ↓
+slurmd -C
+  ↓
+actual Slurm topology
+  ↓
+controller NodeName
+  ↓
+scontrol reconfigure
+  ↓
+registration
+~~~
+
+After correcting the stale values, l40-node-01 became:
+
+~~~text
+CPUAlloc=0 CPUEfctv=8 CPUTot=8 CPULoad=0.02
+RealMemory=32094 AllocMem=0 FreeMem=29832 Sockets=1 Boards=1
+State=IDLE ThreadsPerCore=1 TmpDisk=0 Weight=1 Owner=N/A MCS_label=N/A
+~~~
+
+This is the evidence that the controller and worker resource models were aligned for that node.
+
+---
+
+## H. MUNGE authentication failure
+
+During the registration troubleshooting, controller logs contained:
+
+~~~text
+Munge decode failed: Invalid credential
+MESSAGE_NODE_REGISTRATION_STATUS has authentication error
+Protocol authentication error
+~~~
+
+### What layer failed?
+
+The important architecture is:
+
+~~~text
+slurmctld
+    ↓
+authenticated Slurm RPC
+    ↓
+MUNGE
+    ↓
+slurmd
+~~~
+
+Therefore an MUNGE credential failure is a **control-plane authentication problem**.
+
+It is not evidence of a GPU failure.
+
+### Commands actually used
+
+Service status:
+
+~~~bash
+systemctl status munge --no-pager
+~~~
+
+Local encode/decode:
+
+~~~bash
+munge -n | unmunge
+~~~
+
+Key hash:
+
+~~~bash
+sha256sum /etc/munge/munge.key
+~~~
+
+Observed hash evidence:
+
+~~~text
+75dcd8df132f7be0f069906b2f504967f8eca65e834e953f7039011188d2748e
+~~~
+
+The key file permissions were also inspected.
+
+MUNGE and slurmd were restarted during troubleshooting.
+
+### What was proven?
+
+Local MUNGE worked.
+
+The key hash was checked.
+
+The services were active.
+
+### What was NOT proven?
+
+The exact transient cause of the cross-node authentication failure was not conclusively isolated.
+
+That distinction must remain in the documentation.
+
+We should not write:
+
+~~~text
+"The MUNGE key was wrong."
+~~~
+
+because the evidence did not establish that.
+
+### Better future diagnostic
+
+A future recurrence should include a cross-node test such as:
+
+~~~bash
+munge -n | ssh <worker> unmunge
+~~~
+
+along with:
+
+~~~bash
+sha256sum /etc/munge/munge.key
+stat /etc/munge/munge.key
+systemctl status munge
+timedatectl
+~~~
+
+on both sides.
+
+---
+
+## I. Administrative authorization error
+
+During troubleshooting an administrative node update was run as a non-root user.
+
+The controller logged:
+
+~~~text
+Security violation, UPDATE_NODE RPC from uid=1001
+_slurm_rpc_update_node ... Invalid user id
+~~~
+
+### Meaning
+
+This means the caller did not have the authorization required for that administrative operation.
+
+It does not mean the worker failed registration.
+
+It does not mean MUNGE is broken.
+
+It is a separate control-plane authorization issue.
+
+### Learning
+
+When debugging Slurm, classify the failure:
+
+~~~text
+authentication
+authorization
+registration
+scheduling
+resource configuration
+VM health
+~~~
+
+before changing configuration.
+
+---
+
+## J. l40-node-02 became unresponsive
+
+The controller later showed:
+
+~~~text
+State=IDLE+NOT_RESPONDING
+~~~
+
+for l40-node-02.
+
+At the same time, SSH access to the node was unavailable.
+
+### Why this changed the diagnosis
+
+At this point it was no longer useful to keep changing Slurm configuration blindly.
+
+The diagnostic path became:
+
+~~~text
+Slurm says NOT_RESPONDING
+        ↓
+Can we reach port 6818?
+        ↓
+Can we SSH?
+        ↓
+Is the VM healthy?
+~~~
+
+The VM was restarted through the cloud control plane.
+
+After the restart:
+
+~~~text
+PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
+gpu*         up   infinite      2   idle l40-node-[01-02]
+~~~
+
+### Learning
+
+A scheduler state is not necessarily the root cause.
+
+If SSH is also unavailable, investigate the VM/OS/network layer.
+
+---
+
+## K. Final scheduler state
+
+The final healthy state was:
+
+~~~text
+PARTITION AVAIL  TIMELIMIT  NODES  STATE NODELIST
+gpu*         up   infinite      2   idle l40-node-[01-02]
+~~~
+
+This was the first clean indication that both GPU workers were available to the scheduler.
+
+Only after this point did we proceed to GPU workload testing.
+
+---
+
+## L. GPU allocation — first scheduler-level proof
+
+Command actually executed:
+
+~~~bash
+srun --partition=gpu --gres=gpu:1 --nodes=1 --ntasks=1 \
+  nvidia-smi
+~~~
+
+Output identified:
+
+~~~text
+NVIDIA-SMI 580.173.02
+Driver Version: 580.173.02
+CUDA Version: 13.0
+GPU: NVIDIA L40S
+46068 MiB
+~~~
+
+### What this proves
+
+The command crossed the scheduler boundary:
+
+~~~text
+controller
+   ↓
+srun
+   ↓
+slurmctld
+   ↓
+gpu partition
+   ↓
+GRES request
+   ↓
+worker
+   ↓
+NVIDIA GPU
+~~~
+
+This is stronger than running nvidia-smi directly on the worker.
+
+---
+
+## M. Accounting proof
+
+After the GPU job:
+
+~~~bash
+sacct
+~~~
+
+returned:
+
+~~~text
+JobID           JobName  Partition    Account  AllocCPUS      State ExitCode
+------------ ---------- ---------- ---------- ---------- ---------- --------
+10           nvidia-smi        gpu       root          1  COMPLETED      0:0
+10.0         nvidia-smi                  root          1  COMPLETED      0:0
+~~~
+
+This showed that the completed GPU job was recorded by Slurm accounting.
+
+---
+
+## N. CUDA runtime and toolkit proof
+
+Runtime query:
+
+~~~bash
+srun --partition=gpu --gres=gpu:1 --nodes=1 --ntasks=1 \
+  bash -lc 'nvidia-smi -q | grep -E "CUDA Version|Product Name|Driver Version"'
+~~~
+
+Observed:
+
+~~~text
+Driver Version : 580.173.02
+CUDA Version   : 13.0
+Product Name   : NVIDIA L40S
+~~~
+
+Toolkit query:
+
+~~~bash
+srun --partition=gpu --gres=gpu:1 --nodes=1 --ntasks=1 \
+  bash -lc 'command -v nvcc || true; nvcc --version 2>/dev/null || true'
+~~~
+
+Observed:
+
+~~~text
+/usr/local/cuda-13.0/bin/nvcc
+
+Cuda compilation tools, release 13.0, V13.0.88
+~~~
+
+### Learning
+
+The stack has multiple layers:
+
+~~~text
+NVIDIA driver
+    ↓
+CUDA runtime
+    ↓
+CUDA Toolkit / nvcc
+    ↓
+ML framework
+    ↓
+application
+~~~
+
+A failure in one layer must not automatically be attributed to another.
+
+---
+
+## O. PyTorch failure — what it actually told us
+
+A Python CUDA workload was attempted.
+
+The first important operation was:
+
+~~~python
+import torch
+~~~
+
+The result:
+
+~~~text
+ModuleNotFoundError: No module named 'torch'
+~~~
+
+### Correct interpretation
+
+This proves only:
+
+~~~text
+PyTorch is not installed.
+~~~
+
+It does not prove:
+
+~~~text
+CUDA is broken.
+~~~
+
+By this point we had already independently proven the driver, CUDA version, and nvcc.
+
+Therefore PyTorch installation was intentionally deferred rather than added ad hoc to the infrastructure layer.
+
+---
+
+## P. First CUDA compilation attempt — controller was the wrong place
+
+The first attempt to compile the CUDA test was made on the controller.
+
+The command:
+
+~~~bash
+nvcc -O2 /tmp/vector_add.cu -o /tmp/vector_add
+~~~
+
+returned:
+
+~~~text
+Command 'nvcc' not found, but can be installed with:
+apt install nvidia-cuda-toolkit
+~~~
+
+### Why this is an important learning failure
+
+The controller is not the GPU compute environment.
+
+The intended architecture is:
+
+~~~text
+controller
+   |
+   | srun
+   ↓
+GPU worker
+   |
+   +-- nvcc
+   +-- CUDA runtime
+   +-- L40S
+~~~
+
+Installing CUDA on the controller merely to compile the test would weaken the architectural lesson.
+
+The corrected test was therefore performed inside the Slurm allocation.
+
+---
+
+## Q. Actual CUDA kernel execution
+
+The final test compiled and ran a CUDA vector-add program through Slurm.
+
+The operation was:
+
+~~~text
+a[i] = 1.0
+b[i] = 2.0
+c[i] = a[i] + b[i]
+~~~
+
+The final output was:
+
+~~~text
+CUDA execution successful
+c[0] = 3.0
+c[N-1] = 3.0
+~~~
+
+### Why this is the strongest proof in this phase
+
+The successful result means all of these layers worked together:
+
+~~~text
+Slurm allocation
+    ↓
+GPU worker
+    ↓
+nvcc
+    ↓
+CUDA runtime
+    ↓
+L40S
+    ↓
+kernel launch
+    ↓
+device synchronization
+    ↓
+correct result
+~~~
+
+This is actual GPU computation.
+
+It is substantially stronger evidence than:
+
+~~~bash
+nvidia-smi
+~~~
+
+alone.
+
+---
+
+# R. Complete troubleshooting timeline
+
+The practical sequence was:
+
+~~~text
+1. Create/use two L40S workers
+        ↓
+2. Run Ansible
+        ↓
+3. Hostname mismatch discovered
+        ↓
+4. Fix hostname via Ansible
+        ↓
+5. GRES validation output issue discovered
+        ↓
+6. Capture stderr as well as stdout
+        ↓
+7. Ansible converges successfully
+        ↓
+8. Controller snapshot/recreation changes controller IP
+        ↓
+9. Restore logical controller hostname
+        ↓
+10. Update controller address in Git
+        ↓
+11. Worker registration attempted
+        ↓
+12. INVALID_REG discovered
+        ↓
+13. Compare controller resources with worker resources
+        ↓
+14. Discover stale CPUs/memory configuration
+        ↓
+15. Correct controller node definitions
+        ↓
+16. MUNGE authentication errors observed
+        ↓
+17. Check service, local MUNGE, key hash, permissions
+        ↓
+18. Exact transient MUNGE cause remains unproven
+        ↓
+19. l40-node-02 becomes unresponsive
+        ↓
+20. VM restarted
+        ↓
+21. Both nodes become IDLE
+        ↓
+22. srun --gres=gpu:1 nvidia-smi succeeds
+        ↓
+23. sacct records GPU job
+        ↓
+24. CUDA 13 / nvcc 13.0.88 verified
+        ↓
+25. PyTorch test shows torch is not installed
+        ↓
+26. First nvcc attempt on controller fails
+        ↓
+27. CUDA test moved inside Slurm allocation
+        ↓
+28. Real CUDA vector-add kernel succeeds
+~~~
+
+This sequence is the actual learning path of the phase.
+
+---
+
+# S. Failure classification learned from the phase
+
+A useful way to troubleshoot the factory is to move from lower layers to higher layers.
+
+~~~text
+Layer 1 — VM
+    Is the VM alive?
+    Can SSH connect?
+
+Layer 2 — network
+    Can the controller reach worker port 6818?
+
+Layer 3 — authentication
+    Is MUNGE working?
+
+Layer 4 — worker daemon
+    Is slurmd active?
+
+Layer 5 — GPU discovery
+    Does slurmd -G find the GPU?
+
+Layer 6 — controller registration
+    Does sinfo show the node?
+
+Layer 7 — resource contract
+    Does controller configuration match slurmd -C?
+
+Layer 8 — scheduling
+    Does srun allocate the GPU?
+
+Layer 9 — GPU visibility
+    Does nvidia-smi work inside the job?
+
+Layer 10 — CUDA
+    Can nvcc compile and can a kernel execute?
+
+Layer 11 — ML framework
+    Does PyTorch/vLLM/etc. work?
+
+Layer 12 — distributed AI
+    NCCL / InfiniBand / GPUDirect RDMA / multi-node training
+~~~
+
+The key operational lesson is:
+
+> Do not troubleshoot layer 11 when layer 7 is broken.
+
+---
+
+# T. What we intentionally did not change
+
+Several tempting changes were deliberately avoided.
+
+### We did not install PyTorch
+
+Reason:
+
+~~~text
+GPU infrastructure already proven.
+PyTorch belongs to a later software/application layer.
+~~~
+
+### We did not install CUDA on the controller
+
+Reason:
+
+~~~text
+CUDA belongs on GPU workers.
+The correct test is through Slurm.
+~~~
+
+### We did not invent a MUNGE root cause
+
+Reason:
+
+~~~text
+The available evidence did not prove the exact transient cause.
+~~~
+
+### We did not leave GPU VMs running
+
+Reason:
+
+~~~text
+The infrastructure validation is complete for this phase.
+GPU compute is expensive.
+The controller snapshot is sufficient for recovery.
+~~~
+
+---
+
+# U. What is proven versus what is still a future experiment
+
+## Proven
+
+~~~text
+Two L40S workers can participate in the Slurm cluster.
+MUNGE can operate locally.
+GRES discovers the L40S.
+Slurm can register the workers.
+Slurm can allocate one GPU.
+nvidia-smi works inside the allocation.
+Slurm accounting records the GPU job.
+CUDA 13.0 is available.
+nvcc 13.0.88 is available.
+A real CUDA kernel executes successfully.
+~~~
+
+## Not proven
+
+~~~text
+PyTorch
+vLLM
+containers / Pyxis / Enroot
+multi-GPU
+NCCL
+InfiniBand
+GPUDirect RDMA
+distributed training
+Kubernetes GPU scheduling
+DRA
+Run:ai
+GPU Operator
+high-availability Slurm controller
+automated Nebius node lifecycle
+~~~
+
+These are deliberately left for later phases.
+
+---
+
+# V. Documentation and rebuild principle
+
+The lab is being built as a progressive learning system.
+
+Every important incident should be captured as:
+
+~~~text
+Observed symptom
+      ↓
+Exact command/output
+      ↓
+What that output means
+      ↓
+Possible causes
+      ↓
+Tests performed
+      ↓
+Proven root cause
+      ↓
+Fix
+      ↓
+Validation
+      ↓
+How to reproduce/rebuild
+~~~
+
+If the evidence does not prove the root cause, the documentation must say so.
+
+This is more valuable than a clean-looking success report because it teaches the troubleshooting method required for a real AI infrastructure platform.
+
+---
+
+# W. End-of-day state
+
+The validated cluster state before shutdown was:
+
+~~~text
+gpu* up infinite 2 idle l40-node-[01-02]
+~~~
+
+The GPU execution proof was:
+
+~~~text
+CUDA execution successful
+c[0] = 3.0
+c[N-1] = 3.0
+~~~
+
+The intended cost-control state after shutdown is:
+
+~~~text
+GPU workers: OFF
+Controller VM: OFF
+Controller disk snapshot: RETAINED
+Git repository: RETAINED
+MUNGE key: RETAINED SECURELY
+~~~
+
+Tomorrow's work should begin from the controller snapshot recovery runbook, not from an assumption that the old VM network identity still exists.
