@@ -141,24 +141,33 @@ Validation is a first-class acceptance layer. It checks:
 
 A separate validation playbook allows the validation role to be rerun without reconverging the entire node.
 
-## Inventory Model
+## Verified Phase 04 Worker Baseline
 
-The lab inventory intentionally contains **zero GPU hosts right now**.
+Two Nebius L40S workers have now been provisioned and are reachable from the Ansible controller:
 
-The intended shape is:
+| Node | Private IP | GPU | Driver | Kernel | GPU memory |
+|---|---|---|---|---|---:|
+| `l40-node-01` | `10.0.0.57` | NVIDIA L40S | `580.173.02` | `6.11.0-1016-nvidia` | 46068 MiB |
+| `l40-node-02` | `10.0.0.36` | NVIDIA L40S | `580.173.02` | `6.11.0-1016-nvidia` | 46068 MiB |
+
+Both workers are Ubuntu 24.04 (Noble), expose `/usr/bin/python3`, and initially have MUNGE and Slurm inactive.
+
+The Ansible inventory now contains:
 
 ```yaml
 gpu_workers:
   hosts:
     l40-node-01:
-      ansible_host: <verified-private-ip>
+      ansible_host: 10.0.0.57
     l40-node-02:
-      ansible_host: <verified-private-ip>
+      ansible_host: 10.0.0.36
 ```
 
-The addresses and hardware overrides will only be populated after Phase 04 creates the actual Nebius instances.
+The Nebius-generated instance hostnames are intentionally not used as Slurm/Ansible logical node names.
 
-This keeps infrastructure discovery separate from configuration logic and avoids inventing hardware facts.
+The NVIDIA role validates the verified image baseline and does not install or replace the vendor-supplied driver by default. The expected driver version is recorded as `580.173.02` for this lab image.
+
+## Inventory Model
 
 ## Secret Boundary
 
