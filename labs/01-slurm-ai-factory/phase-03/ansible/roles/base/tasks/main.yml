@@ -6,6 +6,10 @@
     update_cache: true
     cache_valid_time: 3600
 
+- name: Set logical AI factory worker hostname
+  ansible.builtin.hostname:
+    name: "{{ inventory_hostname }}"
+
 - name: Configure lab timezone
   community.general.timezone:
     name: "{{ base_timezone }}"
