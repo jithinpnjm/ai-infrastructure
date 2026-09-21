@@ -18,7 +18,7 @@
     - nvidia_cuda_packages | length > 0
 
 - name: Check NVIDIA management utility
-  ansible.builtin.command: nvidia-smi --query-gpu=name --format=csv,noheader
+  ansible.builtin.command: nvidia-smi --query-gpu=name,driver_version --format=csv,noheader
   register: nvidia_smi
   changed_when: false
 
@@ -37,6 +37,14 @@
     fail_msg: >-
       Expected GPU type containing '{{ nvidia_expected_gpu_type }}', but
       nvidia-smi reported: {{ nvidia_smi.stdout | trim }}
+
+- name: Require expected NVIDIA driver version
+  ansible.builtin.assert:
+    that:
+      - nvidia_expected_driver_version in nvidia_smi.stdout
+    fail_msg: >-
+      Expected NVIDIA driver version '{{ nvidia_expected_driver_version }}',
+      but nvidia-smi reported: {{ nvidia_smi.stdout | trim }}
 
 - name: Check CUDA compiler when present
   ansible.builtin.command: nvcc --version
